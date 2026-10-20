@@ -357,9 +357,16 @@ class TariffApi:
     def url(self, path: str) -> str:
         return self.base_url + path
 
-    def get_json(self, path: str, cache: bool = True) -> dict | None:
-        """GET path as JSON; None on 404 or a redirect (not a commodity). Cached if cache=True."""
-        cache_path = self.cache_dir / (path.strip("/") + ".json")
+    def get_json(self, path: str, cache: bool = True, params: dict | None = None) -> dict | None:
+        """GET path as JSON; None on 404 or a redirect (not a commodity).
+
+        With cache=True the body is saved (a 404 is saved as null) and reused on reruns; query
+        params become part of the file name, e.g. commodities/0101210000__as_of=2024-01-01.json.
+        """
+        name = path.strip("/")
+        if params:
+            name += "__" + "__".join(f"{k}={v}" for k, v in sorted(params.items()))
+        cache_path = self.cache_dir / (name + ".json")
         if cache and cache_path.exists() and not self.refresh:
             return json.loads(cache_path.read_text(encoding="utf-8"))
 
@@ -369,7 +376,7 @@ class TariffApi:
         while attempt <= self.max_retries:
             self._wait_turn()
             try:
-                response = self._client.get(self.url(path), headers=self._headers())
+                response = self._client.get(self.url(path), params=params, headers=self._headers())
             except httpx.TransportError as exc:
                 problem = type(exc).__name__
             else:
@@ -381,6 +388,9 @@ class TariffApi:
                         cache_path.write_text(response.text, encoding="utf-8")
                     return response.json()
                 if status == 404 or 300 <= status < 400:
+                    if cache:
+                        cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        cache_path.write_text("null", encoding="utf-8")
                     return None
                 if status == 401 and self.authenticated and not reauthed:
                     self._token, reauthed = None, True  # token expired: fetch a new one once
