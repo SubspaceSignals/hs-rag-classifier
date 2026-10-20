@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Secrets: only .env.example is committed
+.env
+.env.*
+!.env.example
+
+# Data and models stay out of the repo (downloaded from source at run time)
+data/
+models/
+*.gguf
+*.safetensors
+mlruns/
+mlartifacts/
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+desktop.ini
