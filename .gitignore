@@ -14,8 +14,8 @@ build/
 !.env.example
 
 # Data and models stay out of the repo (downloaded from source at run time)
-data/
-models/
+/data/
+/models/
 *.gguf
 *.safetensors
 mlruns/
