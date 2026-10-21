@@ -1,0 +1,5 @@
+id,description,cn8,code10,label_confidence,source_url,category,notes
+H001,"table knife, fixed blade, stainless, pk 12",82119100,8211910000,sure,https://example.invalid/a,cutlery,UNIT-TEST FIXTURE - not evaluation data
+H002,kitchen knife 20cm fixed blade,82119200,,unsure,https://example.invalid/b,cutlery,UNIT-TEST FIXTURE - not evaluation data
+H003,"table knife fixed blade stainless pack 12",82119100,,sure,https://example.invalid/c,cutlery,UNIT-TEST FIXTURE - not evaluation data
+H004,live pure-bred breeding mare,01012100,0101210000,sure,https://example.invalid/d,animals,UNIT-TEST FIXTURE - not evaluation data

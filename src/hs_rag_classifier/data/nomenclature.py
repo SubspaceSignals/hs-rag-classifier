@@ -23,6 +23,21 @@ Rules used:
                   flagged superseded. Anything that reads "current" lines (codes8, counts, spot
                   check) uses current_lines(), which drops them. In v4.0.1633 this affects four
                   codes in heading 2207, where 2019 rows sit alongside their 2023 replacements.
+    parent repair DBT parents some headings to a TARIC sub-chapter title (a suffix-10 line
+                  carrying the first heading's code, e.g. 6309000000/10 "III. WORN CLOTHING AND
+                  WORN TEXTILE ARTICLES; RAGS" above headings 6309 and 6310). Both sit at indent
+                  0, so by the prefix plus indent rule a heading's parent is its chapter, as the
+                  Trade Tariff API shows. A heading line (suffix 80, code ending 000000) whose
+                  DBT parent is another line in its own chapter is re-parented to the chapter
+                  line; parent_sid_raw keeps the DBT value, parent_repaired flags the row, and
+                  the manifest lists every repair. Unresolved and cross-chapter parents are left
+                  for the checks to report. In v4.0.1633 this affects 190 headings under 34
+                  sub-chapter titles, which are left as childless lines under their chapter.
+    hierarchy     every ancestor below the chapter must share the line's heading and agree with
+                  its code: a suffix-80 ancestor's code (trailing 00 pairs dropped, at least 4
+                  digits) is a prefix of the line's code; a grouping (non-80) ancestor, whose
+                  code is that of its first child, is not above the line's code. The build
+                  stops before writing anything if any line breaks this.
     depth         number of ancestors: chapter 0, heading 1, and so on down the indents.
     description   cleaned of markup: "<br>" and the TARIC "|" non-breaking-space marker become
                   spaces, other tags are dropped keeping their text ("m<sup>3</sup>" -> "m3"),
@@ -54,6 +69,7 @@ import httpx
 import pandas as pd
 
 from hs_rag_classifier.data.atar import RETRY_STATUSES, USER_AGENT
+from hs_rag_classifier.guards import check_retrieval_inputs
 from hs_rag_classifier.tariff_auth import REQUIRED, fetch_token, load_env
 
 DATASET = "uk-tariff-2021-01-01"
@@ -136,12 +152,36 @@ def read_commodities_csv(source: Path | str | io.IOBase) -> pd.DataFrame:
     return df
 
 
+def repair_parents(df: pd.DataFrame) -> pd.Series:
+    """parent_sid with headings misparented by DBT moved to their chapter (rule in module doc)."""
+    roots = df[df["parent_sid"].isna() & df["code10"].str.endswith("00000000")]
+    chapter_sid = dict(zip(roots["code10"].str[:2], roots["sid"], strict=True))
+    chapter_of = dict(zip(df["sid"], df["code10"].str[:2], strict=True))
+    target = df["code10"].str[:2].map(chapter_sid).astype("Int64")
+    heading = (
+        (df["suffix"] == "80")
+        & df["code10"].str.endswith("000000")
+        & ~df["code10"].str.endswith("00000000")
+    )
+    parent_chapter = df["parent_sid"].map(lambda p: None if pd.isna(p) else chapter_of.get(int(p)))
+    wrong = (
+        heading
+        & target.notna()
+        & (parent_chapter == df["code10"].str[:2])
+        & (df["parent_sid"] != target).fillna(False)
+    )
+    return df["parent_sid"].mask(wrong, target)
+
+
 def build_codes(raw: pd.DataFrame, chapter_sections: dict[str, int] | None = None) -> pd.DataFrame:
     """One row per commodity line, with declarable flag, derived codes and chapter-down paths."""
     df = raw[list(CSV_COLUMNS)].rename(columns=CSV_COLUMNS).copy()
     df["sid"] = df["sid"].astype("int64")
     df["parent_sid"] = pd.to_numeric(df["parent_sid"]).astype("Int64")
     df["code10"] = df["code10"].astype(str).str.zfill(10)
+    df["parent_sid_raw"] = df["parent_sid"]
+    df["parent_sid"] = repair_parents(df)
+    df["parent_repaired"] = (df["parent_sid"] != df["parent_sid_raw"]).fillna(False).astype(bool)
     df["suffix"] = df["suffix"].astype(str)
     df["description_raw"] = df["description_raw"].fillna("").astype(str)
     df["description"] = df["description_raw"].map(clean_text)
@@ -200,10 +240,70 @@ def build_codes(raw: pd.DataFrame, chapter_sections: dict[str, int] | None = Non
     return df[
         [
             "sid", "code10", "suffix", "declarable", "superseded", "description", "description_raw",
-            "parent_sid", "validity_start", "validity_end", "depth", "chapter", "heading",
+            "parent_sid", "parent_sid_raw", "parent_repaired", "validity_start", "validity_end",
+            "depth", "chapter", "heading",
             "subheading", "cn8", "section_id", "path_sids", "path_text", "path_complete",
         ]
     ]  # fmt: skip
+
+
+def _significant(code10: str) -> str:
+    while len(code10) > 4 and code10.endswith("00"):
+        code10 = code10[:-2]
+    return code10
+
+
+def hierarchy_violations(codes: pd.DataFrame) -> pd.DataFrame:
+    """Lines with an ancestor below the chapter that disagrees with them (rule in module doc).
+
+    One row per violating line: the line, its heading, and the first offending ancestor.
+    """
+    code_of = dict(zip(codes["sid"], codes["code10"], strict=True))
+    suffix_of = dict(zip(codes["sid"], codes["suffix"], strict=True))
+    rows = []
+    for sid, code, path in zip(codes["sid"], codes["code10"], codes["path_sids"], strict=True):
+        for a in path[1:-1]:  # ancestors between the chapter and the line
+            ac = code_of[int(a)]
+            if suffix_of[int(a)] == "80":
+                ok = ac[:4] == code[:4] and code.startswith(_significant(ac))
+            else:
+                ok = ac[:4] == code[:4] and code >= ac
+            if not ok:
+                rows.append(
+                    {
+                        "sid": int(sid),
+                        "code10": code,
+                        "heading": code[:4],
+                        "ancestor_sid": int(a),
+                        "ancestor_code10": ac,
+                        "ancestor_suffix": suffix_of[int(a)],
+                    }
+                )
+                break
+    return pd.DataFrame(
+        rows,
+        columns=["sid", "code10", "heading", "ancestor_sid", "ancestor_code10", "ancestor_suffix"],
+    )
+
+
+def parent_repairs(codes: pd.DataFrame) -> list[dict]:
+    """Every row whose parent was repaired, for the manifest."""
+    code_of = dict(zip(codes["sid"], codes["code10"], strict=True))
+    suffix_of = dict(zip(codes["sid"], codes["suffix"], strict=True))
+    fixed = codes[codes["parent_repaired"]].sort_values("sid")
+    return [
+        {
+            "sid": int(r.sid),
+            "code10": r.code10,
+            "suffix": r.suffix,
+            "parent_sid_raw": int(r.parent_sid_raw),
+            "parent_code10_raw": code_of.get(int(r.parent_sid_raw)),
+            "parent_suffix_raw": suffix_of.get(int(r.parent_sid_raw)),
+            "parent_sid": int(r.parent_sid),
+            "parent_code10": code_of[int(r.parent_sid)],
+        }
+        for r in fixed.itertuples()
+    ]
 
 
 def current_lines(codes: pd.DataFrame) -> pd.DataFrame:
@@ -463,6 +563,16 @@ def collect_notes(
     return notes, ranges, missing
 
 
+def notes_input_files(
+    api_dir: Path, ranges: dict[int, tuple[str, str]], chapters: list[str]
+) -> list[Path]:
+    """The cached API files the notes were built from, named exactly (never a folder glob)."""
+    names = ["sections.json"]
+    names += [f"sections/{s}.json" for s in sorted(ranges)]
+    names += [f"chapters/{c}.json" for c in chapters]
+    return [api_dir / n for n in names if (api_dir / n).exists()]
+
+
 def chapter_section_map(notes: pd.DataFrame) -> dict[str, int]:
     chapters = notes[(notes["level"] == "chapter") & notes["section_id"].notna()]
     return {c: int(s) for c, s in zip(chapters["id"], chapters["section_id"], strict=True)}
@@ -494,6 +604,7 @@ def run_checks(
             section_problems.append({"chapter": ch, "api_section": by_api, "ranges": by_range})
 
     dup_code_suffix = codes[codes.duplicated(["code10", "suffix"], keep=False)]
+    violations = hierarchy_violations(codes)
     return {
         "counts": {
             "lines": len(codes),
@@ -522,6 +633,10 @@ def run_checks(
             "current_duplicate_code10_suffix_rows": int(
                 current.duplicated(["code10", "suffix"]).sum()
             ),
+            "parents_repaired": int(codes["parent_repaired"].sum()),
+            "hierarchy_violations": len(violations),
+            "hierarchy_violations_by_heading": violations["heading"].value_counts().to_dict(),
+            "hierarchy_violation_examples": violations.head(20).to_dict("records"),
         },
     }
 
@@ -630,6 +745,8 @@ def print_report(checks: dict, spot: dict, notes: pd.DataFrame, missing: list[st
     print(f"  chapters without exactly one section: {i['chapters_without_exactly_one_section']}")
     print(f"  duplicate sid rows: {i['duplicate_sid_rows']}")
     print(f"  lines whose parent is in another chapter: {i['parent_in_other_chapter_count']}")
+    print(f"  parents repaired (heading under a sub-chapter title): {i['parents_repaired']}")
+    print(f"  hierarchy violations: {i['hierarchy_violations']}")
     print(f"  rows sharing (code10, suffix): {i['duplicate_code10_suffix_rows']} "
           f"in {i['duplicate_code10_suffix_codes']}; "
           f"among current lines: {i['current_duplicate_code10_suffix_rows']}")  # fmt: skip
@@ -690,13 +807,22 @@ def cmd_build(args: argparse.Namespace) -> int:
     finally:
         api.close()
 
+    violations = checks["integrity"]["hierarchy_violations"]
+    if violations:
+        print_report(checks, spot, notes, missing)
+        print(f"\n{violations} hierarchy violations by heading: "
+              f"{checks['integrity']['hierarchy_violations_by_heading']}; nothing written.",
+              file=sys.stderr)  # fmt: skip
+        return 1
+
     out = root / "processed" / "tariff" / version
     out.mkdir(parents=True, exist_ok=True)
     codes.to_parquet(out / "codes.parquet", index=False)
     codes8.to_parquet(out / "codes8.parquet", index=False)
     notes.to_parquet(out / "notes.parquet", index=False)
 
-    api_files = sorted((root / "raw" / "tariff" / "api").rglob("*.json"))
+    api_files = notes_input_files(root / "raw" / "tariff" / "api", ranges, chapters)
+    check_retrieval_inputs([raw_csv, *api_files], root)
     manifest = {
         "dataset": DATASET,
         "version": version,
@@ -715,6 +841,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         },
         "row_counts": {"codes": len(codes), "codes8": len(codes8), "notes": len(notes)},
         "checks": checks,
+        "parent_repairs": parent_repairs(codes),
         "spot_check": spot,
         "sha256": {
             "raw": {str(p.relative_to(root)): sha256(p) for p in [raw_csv, *api_files]},

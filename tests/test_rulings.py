@@ -225,3 +225,32 @@ def test_ref_files_refuse_to_change_frozen_test(prepared, tmp_path):
         R.write_ref_files(groups, tmp_path)
     assert R.write_ref_files(groups, tmp_path, refreeze=True) == refs  # explicit decision only
     assert (tmp_path / "test_refs.txt").read_text() == "\n".join(refs["test"]) + "\n"
+
+
+def test_refused_build_writes_nothing(tmp_path, monkeypatch):
+    """The freeze guard runs before any Parquet (or other split file) is written."""
+    root, splits = tmp_path / "data", tmp_path / "splits"
+    (root / "raw" / "atar").mkdir(parents=True)
+    (root / "raw" / "atar" / "rulings.jsonl").write_bytes(RULINGS.read_bytes())
+    tariff = root / "processed" / "tariff" / R.NOMENCLATURE_VERSION
+    tariff.mkdir(parents=True)
+    codes = fixture_codes()
+    codes.to_parquet(tariff / "codes.parquet", index=False)
+    pd.DataFrame({"cn8": sorted(set(codes.loc[codes["declarable"], "cn8"]))}).to_parquet(
+        tariff / "codes8.parquet", index=False
+    )
+    monkeypatch.setattr(R, "N_TEST", 2)
+    monkeypatch.setattr(R, "N_VAL", 1)
+    monkeypatch.setattr(R, "TariffApi", lambda cache, delay_s: TariffApi(cache, env={}))
+    monkeypatch.setattr(R, "api_valid_on", lambda api: lambda code, start: code in VALID_THEN)
+    splits.mkdir()
+    (splits / "test_refs.txt").write_text("123\n")  # a frozen test split this build would change
+
+    with pytest.raises(RuntimeError, match="frozen"):
+        R.main(["build", "--root", str(root), "--splits-dir", str(splits)])
+    assert not (root / "processed" / "rulings").exists()
+    assert sorted(p.name for p in splits.iterdir()) == ["test_refs.txt"]
+    assert (splits / "test_refs.txt").read_text() == "123\n"
+
+    assert R.main(["build", "--root", str(root), "--splits-dir", str(splits), "--refreeze"]) == 0
+    assert (root / "processed" / "rulings" / R.SPLIT_NAME / "test.parquet").exists()

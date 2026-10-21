@@ -523,8 +523,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     report = build_report(rulings, groups, audit, pairs, rng)
 
     out = root / "processed" / "rulings" / SPLIT_NAME
+    write_ref_files(groups, args.splits_dir, refreeze=args.refreeze)  # guard first
     write_split_files(groups, rulings, out)
-    write_ref_files(groups, args.splits_dir, refreeze=args.refreeze)
     test_sha = _sha_text(args.splits_dir / "test_refs.txt")
     (args.splits_dir / "SPLIT.md").write_text(split_md(report, test_sha), encoding="utf-8")
 
@@ -703,7 +703,7 @@ def build_report(rulings, groups, audit, pairs, rng) -> dict:
                     "code": r.code_raw,
                     "start": str(r.start_date),
                     "status": r.code_status,
-                    "mapped_to": r.mapped_code10,
+                    "mapped_to": r.mapped_code10 if isinstance(r.mapped_code10, str) else None,
                     "label_depth": None if pd.isna(r.label_depth) else int(r.label_depth),
                     "split": r.split,
                 }

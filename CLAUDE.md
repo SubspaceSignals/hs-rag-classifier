@@ -17,6 +17,7 @@ The full plan, decisions log and session log live in the project handoff one lev
 - **No secrets in git.** The only key (Trade Tariff API) lives in an uncommitted `.env`.
 - **Datasets are cited and downloaded from source at run time, never re-hosted.** OGL attribution stays in the README.
 - **Test sets are frozen before any model work.** Never tune on the test split. Claude-written text never goes into a test set.
+- **Trade Tariff search references are a test set only; never index them for retrieval.**
 - Output is advisory, never a legal ruling.
 
 ## Working conventions

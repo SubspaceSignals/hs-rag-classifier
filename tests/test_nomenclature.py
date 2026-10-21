@@ -6,6 +6,7 @@ import httpx
 import pandas as pd
 import pytest
 
+from hs_rag_classifier.data import nomenclature as N
 from hs_rag_classifier.data.nomenclature import (
     API_BASE_AUTH,
     API_BASE_OPEN,
@@ -17,6 +18,8 @@ from hs_rag_classifier.data.nomenclature import (
     clean_note,
     clean_text,
     download_csv,
+    hierarchy_violations,
+    parent_repairs,
     parse_chapter,
     parse_section,
     parse_section_ranges,
@@ -171,6 +174,7 @@ def test_run_checks_clean_and_broken(codes, codes8):
     assert i["unresolved_parent_sid"] == 0 and i["declarable_without_chapter_path"] == 0
     assert i["chapters_without_exactly_one_section"] == [] and i["duplicate_sid_rows"] == 0
     assert i["parent_in_other_chapter_count"] == 0
+    assert i["hierarchy_violations"] == 0 and i["parents_repaired"] == 0
 
     raw = read_commodities_csv(FIXTURES / "commodities.csv")
     raw.loc[raw["commodity__sid"] == "1013", "parent__sid"] = "9999"  # orphan a branch
@@ -307,3 +311,49 @@ def test_check_superseded_against_api(codes, tmp_path):
     assert result["kept_sid"] == 1007 and result["superseded_sids"] == [1008]
     assert result["sid_matches"] and result["validity_start_matches"]
     assert result["description_matches"]
+
+
+def test_headings_under_sub_chapter_title_repaired_to_chapter():
+    """DBT parents headings 6309 and 6310 to the sub-chapter title 6309000000/10; the API (and
+    the indent rule) put them straight under chapter 63."""
+    codes = build_codes(read_commodities_csv(FIXTURES / "misparented.csv"))
+    repaired = codes[codes["parent_repaired"]]
+    assert sorted(repaired["sid"]) == [3002, 3003]
+    assert set(repaired["parent_sid_raw"]) == {3001} and set(repaired["parent_sid"]) == {3000}
+    kept = codes[~codes["parent_repaired"]]
+    assert kept["parent_sid_raw"].equals(kept["parent_sid"])
+    leaf = line(codes, "6310100000")
+    assert list(leaf["path_sids"]) == [3000, 3003, 3004] and leaf["depth"] == 2
+    assert "III." not in leaf["path_text"]
+    assert line(codes, "6310000000")["depth"] == 1
+    assert line(codes, "6309000000", "10")["depth"] == 1  # title kept, now childless
+    assert len(hierarchy_violations(codes)) == 0
+    assert parent_repairs(codes)[1] == {
+        "sid": 3003, "code10": "6310000000", "suffix": "80", "parent_sid_raw": 3001,
+        "parent_code10_raw": "6309000000", "parent_suffix_raw": "10", "parent_sid": 3000,
+        "parent_code10": "6300000000",
+    }  # fmt: skip
+    codes8 = build_codes8(codes).set_index("cn8")
+    assert codes8.loc["63090000", "cn8_declarable"]
+    assert codes8.loc["63101000", "path_text"].startswith("OTHER MADE UP") and (
+        "III." not in codes8.loc["63101000", "path_text"]
+    )
+
+
+def test_hierarchy_check_catches_misparenting(monkeypatch):
+    monkeypatch.setattr(N, "repair_parents", lambda df: df["parent_sid"])
+    codes = build_codes(read_commodities_csv(FIXTURES / "misparented.csv"))
+    v = hierarchy_violations(codes)
+    assert sorted(v["code10"]) == ["6310000000", "6310100000", "6310900000"]
+    assert set(v["heading"]) == {"6310"} and set(v["ancestor_sid"]) == {3001}
+    i = run_checks(codes, build_codes8(codes), {}, {})["integrity"]
+    assert i["hierarchy_violations"] == 3 and i["hierarchy_violations_by_heading"] == {"6310": 3}
+    assert i["parents_repaired"] == 0
+
+
+def test_hierarchy_check_allows_grouping_lines(codes):
+    """Suffix-10 grouping lines carry their first child's code (0101210000/10 over 0101290000)."""
+    assert len(hierarchy_violations(codes)) == 0
+    bad = codes.copy()
+    bad.loc[bad["sid"] == 1005, "code10"] = "0101310000"  # under 0101290000/80 but not its prefix
+    assert list(hierarchy_violations(bad)["sid"]) == [1005]

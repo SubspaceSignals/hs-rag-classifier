@@ -1,0 +1,284 @@
+{
+ "data": [
+  {
+   "id": "1",
+   "type": "search_reference",
+   "attributes": {
+    "title": "live animals",
+    "negated_title": "live animals",
+    "referenced_class": "Chapter",
+    "referenced_id": "01",
+    "goods_nomenclature_item_id": "0100000000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1000,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "2",
+   "type": "search_reference",
+   "attributes": {
+    "title": "horses",
+    "negated_title": "horses",
+    "referenced_class": "Heading",
+    "referenced_id": "0101",
+    "goods_nomenclature_item_id": "0101000000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1001,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "3",
+   "type": "search_reference",
+   "attributes": {
+    "title": "breeding horses",
+    "negated_title": "breeding horses",
+    "referenced_class": "Commodity",
+    "referenced_id": "0101210000",
+    "goods_nomenclature_item_id": "0101210000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1003,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "4",
+   "type": "search_reference",
+   "attributes": {
+    "title": "other horses",
+    "negated_title": "other horses",
+    "referenced_class": "Subheading",
+    "referenced_id": "0101290000-80",
+    "goods_nomenclature_item_id": "0101290000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1004,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "5",
+   "type": "search_reference",
+   "attributes": {
+    "title": "light calves",
+    "negated_title": "light calves",
+    "referenced_class": "Subheading",
+    "referenced_id": "0102291000-80",
+    "goods_nomenclature_item_id": "0102291000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1013,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "6",
+   "type": "search_reference",
+   "attributes": {
+    "title": "other bovines",
+    "negated_title": "other bovines",
+    "referenced_class": "Subheading",
+    "referenced_id": "0102291000-10",
+    "goods_nomenclature_item_id": "0102291000",
+    "productline_suffix": "10",
+    "goods_nomenclature_sid": 1012,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "7",
+   "type": "search_reference",
+   "attributes": {
+    "title": "other fixed blade knives",
+    "negated_title": "other fixed blade knives",
+    "referenced_class": "Subheading",
+    "referenced_id": "8211920000-80",
+    "goods_nomenclature_item_id": "8211920000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 2005,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "8",
+   "type": "search_reference",
+   "attributes": {
+    "title": "hedgehogs",
+    "negated_title": "hedgehogs",
+    "referenced_class": "Commodity",
+    "referenced_id": "0106990000",
+    "goods_nomenclature_item_id": "0106990000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 9999,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "9",
+   "type": "search_reference",
+   "attributes": {
+    "title": "table knives",
+    "negated_title": "table knives",
+    "referenced_class": "Commodity",
+    "referenced_id": "8211910000",
+    "goods_nomenclature_item_id": "8211910000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 8888,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "10",
+   "type": "search_reference",
+   "attributes": {
+    "title": "Table knives",
+    "negated_title": "Table knives",
+    "referenced_class": "Commodity",
+    "referenced_id": "8211910000",
+    "goods_nomenclature_item_id": "8211910000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 2004,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "11",
+   "type": "search_reference",
+   "attributes": {
+    "title": "asses",
+    "negated_title": "asses",
+    "referenced_class": "Commodity",
+    "referenced_id": "0101300000",
+    "goods_nomenclature_item_id": "0101300000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1008,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "12",
+   "type": "search_reference",
+   "attributes": {
+    "title": "asses",
+    "negated_title": "asses",
+    "referenced_class": "Commodity",
+    "referenced_id": "0101210000",
+    "goods_nomenclature_item_id": "0101210000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1003,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "13",
+   "type": "search_reference",
+   "attributes": {
+    "title": "young calves",
+    "negated_title": "young calves",
+    "referenced_class": "Subheading",
+    "referenced_id": "0102291000-80",
+    "goods_nomenclature_item_id": "0102291000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1013,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "14",
+   "type": "search_reference",
+   "attributes": {
+    "title": "young calves",
+    "negated_title": "young calves",
+    "referenced_class": "Commodity",
+    "referenced_id": "0102291010",
+    "goods_nomenclature_item_id": "0102291010",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1014,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "15",
+   "type": "search_reference",
+   "attributes": {
+    "title": "kitchen knives",
+    "negated_title": "kitchen knives",
+    "referenced_class": "Subheading",
+    "referenced_id": "8211920000-80",
+    "goods_nomenclature_item_id": "8211920000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 2005,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "16",
+   "type": "search_reference",
+   "attributes": {
+    "title": "kitchen knives",
+    "negated_title": "kitchen knives",
+    "referenced_class": "Commodity",
+    "referenced_id": "8211920010",
+    "goods_nomenclature_item_id": "8211920010",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 2006,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "17",
+   "type": "search_reference",
+   "attributes": {
+    "title": "steak knives",
+    "negated_title": "steak knives",
+    "referenced_class": "Commodity",
+    "referenced_id": "8211910000",
+    "goods_nomenclature_item_id": "8211910000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 2004,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "18",
+   "type": "search_reference",
+   "attributes": {
+    "title": "steak knives",
+    "negated_title": "steak knives",
+    "referenced_class": "Subheading",
+    "referenced_id": "8211920000-80",
+    "goods_nomenclature_item_id": "8211920000",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 2005,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "19",
+   "type": "search_reference",
+   "attributes": {
+    "title": "primates",
+    "negated_title": "primates",
+    "referenced_class": "Commodity",
+    "referenced_id": "0106110010",
+    "goods_nomenclature_item_id": "0106110010",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1022,
+    "usage": "search"
+   }
+  },
+  {
+   "id": "20",
+   "type": "search_reference",
+   "attributes": {
+    "title": "primates",
+    "negated_title": "primates",
+    "referenced_class": "Commodity",
+    "referenced_id": "0106110090",
+    "goods_nomenclature_item_id": "0106110090",
+    "productline_suffix": "80",
+    "goods_nomenclature_sid": 1023,
+    "usage": "search"
+   }
+  }
+ ]
+}

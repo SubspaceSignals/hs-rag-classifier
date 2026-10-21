@@ -1,0 +1,7 @@
+"id","commodity__sid","commodity__code","commodity__suffix","commodity__description","commodity__validity_start","commodity__validity_end","parent__sid","parent__code","parent__suffix"
+1,3000,"6300000000","80","OTHER MADE UP TEXTILE ARTICLES; SETS; WORN CLOTHING AND WORN TEXTILE ARTICLES; RAGS","1971-12-31","#NA","#NA","#NA","#NA"
+2,3001,"6309000000","10","III. WORN CLOTHING AND WORN TEXTILE ARTICLES; RAGS","1972-01-01","#NA",3000,"6300000000","80"
+3,3002,"6309000000","80","Worn clothing and other worn articles","1972-01-01","#NA",3001,"6309000000","10"
+4,3003,"6310000000","80","Used or new rags, scrap twine, cordage, rope and cables","1972-01-01","#NA",3001,"6309000000","10"
+5,3004,"6310100000","80","Sorted","1972-01-01","#NA",3003,"6310000000","80"
+6,3005,"6310900000","80","Other","1972-01-01","#NA",3003,"6310000000","80"
