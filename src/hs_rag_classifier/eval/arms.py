@@ -16,11 +16,11 @@ import random
 from collections.abc import Sequence
 from typing import Any, ClassVar, Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from hs_rag_classifier.eval.items import EvalItem
 
-MAX_CANDIDATES = 10
+MAX_CANDIDATES = 50  # cap on ranked candidates per prediction; read at validation time
 
 
 class Candidate(BaseModel):
@@ -30,12 +30,19 @@ class Candidate(BaseModel):
 
 class Prediction(BaseModel):
     item_id: str
-    candidates: list[Candidate] = Field(default_factory=list, max_length=MAX_CANDIDATES)
+    candidates: list[Candidate] = Field(default_factory=list)
     confidence: float = Field(ge=0.0, le=1.0)
     abstain: bool = False
     rationale: str | None = None
     tokens_in: int | None = None
     tokens_out: int | None = None
+
+    @field_validator("candidates")
+    @classmethod
+    def _at_most_cap(cls, value: list[Candidate]) -> list[Candidate]:
+        if len(value) > MAX_CANDIDATES:
+            raise ValueError(f"at most {MAX_CANDIDATES} candidates, got {len(value)}")
+        return value
 
 
 @runtime_checkable
@@ -80,7 +87,7 @@ class RandomArm:
     sanity: ClassVar[bool] = True
     batch_size = 64
 
-    def __init__(self, cn8_codes: Sequence[str], seed: int = 20261021, k: int = MAX_CANDIDATES):
+    def __init__(self, cn8_codes: Sequence[str], seed: int = 20261021, k: int = 10):
         self.config: dict[str, Any] = {"seed": seed, "k": k}
         self._codes = sorted(cn8_codes)
         self._rng = random.Random(seed)

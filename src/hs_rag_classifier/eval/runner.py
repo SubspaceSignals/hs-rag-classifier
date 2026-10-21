@@ -68,9 +68,16 @@ def valid_codes(root: Path = DATA_ROOT) -> tuple[set[str], set[str]]:
     return valid8, valid10
 
 
+def _b0(valid8: set[str]) -> Arm:
+    from hs_rag_classifier.arms.b0_bm25 import B0BM25Arm
+
+    return B0BM25Arm()
+
+
 ARMS = {
     "oracle": lambda valid8: OracleArm(),
     "random": lambda valid8: RandomArm(sorted(valid8)),
+    "b0": _b0,
 }
 
 
@@ -144,6 +151,7 @@ def run_eval(
     test_log: Path = TEST_LOG,
     git: dict | None = None,
     n_resamples: int = M.BOOTSTRAP_RESAMPLES,
+    tags: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Guard, predict, score, log. Returns run_id, metrics and the scored frame."""
     git = git if git is not None else git_info()
@@ -193,6 +201,7 @@ def run_eval(
                 "nomenclature_version": NOMENCLATURE_VERSION,
                 "ablation": evalset.ablation,
                 "sanity_arm": str(bool(getattr(arm, "sanity", False))).lower(),
+                **(tags or {}),
             }
         )
         preds, latencies, total = predict_all(arm, items)
@@ -232,7 +241,7 @@ def summary_lines(result: dict, arm: Arm, evalset: EvalSet) -> list[str]:
         (
             f"  top-1 at 8: {_fmt(m['top1'][8]['accuracy'])} "
             f"[{_fmt(ci['top1_8']['low'])}, {_fmt(ci['top1_8']['high'])}]; "
-            f"recall at 3: {_fmt(m['recall'][3])}, at 10: {_fmt(m['recall'][10])}"
+            f"recall at " + ", ".join(f"{k}: {_fmt(v)}" for k, v in m["recall"].items())
         ),
         (
             f"  invalid rate {_fmt(m['invalid_rate'])}; abstain rate {_fmt(m['abstain_rate'])}; "

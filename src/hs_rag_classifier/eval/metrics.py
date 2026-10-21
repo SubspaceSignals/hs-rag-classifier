@@ -8,7 +8,8 @@ Rules:
                   least d digits, and its first d match the label's. Rows with label_depth 8
                   are scored up to 8 only (NaN at 10); n is reported for each depth.
     recall at k   at 8 digits: any of the first k candidates is a valid code whose first 8
-                  digits match the label's.
+                  digits match the label's. k = 3 and 10 always; k = 20 and 50 are diagnostics,
+                  reported only when the arm returns that many candidates for some item.
     invalid rate  share of items with a top-1 code whose top-1 is invalid.
     ECE           15 equal-mass bins of top-1 confidence (sorted, split as evenly as possible);
                   sum over bins of |bin| / n * |accuracy at 8 digits - mean confidence|.
@@ -34,6 +35,7 @@ from hs_rag_classifier.eval.items import EvalItem
 
 DEPTHS = (2, 4, 6, 8, 10)
 RECALL_KS = (3, 10)
+DIAGNOSTIC_RECALL_KS = (20, 50)
 ECE_BINS = 15
 REVIEW_RATES = tuple(round(0.05 * i, 2) for i in range(11))  # 0% to 50% in 5-point steps
 HEADLINE_REVIEW_RATE = 0.20  # placeholder, configurable per run
@@ -104,7 +106,7 @@ def score(
         }
         for d in DEPTHS:
             row[f"correct_{d}"] = correct_at(top1, valid, item.label_code, item.label_depth, d)
-        for k in RECALL_KS:
+        for k in RECALL_KS + DIAGNOSTIC_RECALL_KS:
             row[f"recall_{k}"] = recall_at(codes, item.label_code, k, valid8, valid10)
         rows.append(row)
     return pd.DataFrame(rows)
@@ -116,6 +118,12 @@ def top1_accuracy(frame: pd.DataFrame) -> dict[int, dict[str, float]]:
         col = frame[f"correct_{d}"].dropna()
         out[d] = {"accuracy": float(col.mean()) if len(col) else math.nan, "n": len(col)}
     return out
+
+
+def recall_ks(frame: pd.DataFrame) -> tuple[int, ...]:
+    """3 and 10, plus each diagnostic k the arm returned at least k candidates for."""
+    most = int(frame["candidates"].map(len).max()) if len(frame) else 0
+    return RECALL_KS + tuple(k for k in DIAGNOSTIC_RECALL_KS if most >= k)
 
 
 def recall(frame: pd.DataFrame, k: int) -> float:
@@ -280,7 +288,7 @@ def compute_metrics(
         "n_items": len(frame),
         "n_clusters": int(frame["cluster_id"].nunique()),
         "top1": top1_accuracy(frame),
-        "recall": {k: recall(frame, k) for k in RECALL_KS},
+        "recall": {k: recall(frame, k) for k in recall_ks(frame)},
         "invalid_rate": invalid_rate(frame),
         "no_top1_rate": float(frame["top1"].isna().mean()),
         "abstain_rate": float(abstain.mean()),

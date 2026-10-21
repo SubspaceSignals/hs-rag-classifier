@@ -7,12 +7,14 @@ license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "beautifulsoup4>=4.12",
+    "bm25s>=0.3.14",
     "httpx>=0.27",
     "matplotlib>=3.11.2",
     "mlflow>=3.15",
     "pandas>=3.0.6",
     "pyarrow>=25.0.0",
     "pydantic>=2.7",
+    "pystemmer>=3.1.0",
     "scikit-learn>=1.9.1",
 ]
 

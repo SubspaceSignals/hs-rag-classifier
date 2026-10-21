@@ -110,7 +110,7 @@ def test_predictions_must_cover_items_once(mixed):
     with pytest.raises(ValueError, match="exactly once"):
         M.score(items, [pred("A", "0101210000"), pred("A", "0101210000")], VALID8, VALID10)
     with pytest.raises(ValueError):
-        Prediction(item_id="x", candidates=[Candidate(code="1", score=0)] * 11, confidence=0.5)
+        Prediction(item_id="x", candidates=[Candidate(code="1", score=0)] * 51, confidence=0.5)
     with pytest.raises(ValueError):
         Prediction(item_id="x", confidence=1.5)
 
@@ -127,3 +127,18 @@ def test_sanity_arms():
     assert all(c.code in VALID8 for p in a.predict(items) for c in p.candidates)
     assert config_hash({"seed": 1, "k": 2}) == config_hash({"k": 2, "seed": 1})
     assert config_hash({"seed": 1}) != config_hash({"seed": 2})
+
+
+def test_candidate_cap_and_diagnostic_recall(monkeypatch):
+    items = [item("A", "0101210000", 10), item("B", "01022910", 8)]
+    filler = [f"9{n:09d}" for n in range(48)]  # not valid codes: never a match
+    preds = [pred("A", *filler, "0101300000", "0101210000"),  # right code at rank 50
+             pred("B", "0102291010")]  # fmt: skip
+    frame = M.score(items, preds, VALID8, VALID10)
+    m = M.compute_metrics(frame, total_seconds=1.0, n_resamples=20)
+    assert m["recall"] == {3: 0.5, 10: 0.5, 20: 0.5, 50: 1.0}
+    short = M.compute_metrics(frame.iloc[[1]], total_seconds=1.0, n_resamples=20)
+    assert set(short["recall"]) == {3, 10}  # diagnostics only when that many were returned
+    monkeypatch.setattr("hs_rag_classifier.eval.arms.MAX_CANDIDATES", 5)
+    with pytest.raises(ValueError, match="at most 5"):
+        pred("A", *filler[:6])
