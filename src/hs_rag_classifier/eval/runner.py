@@ -96,6 +96,12 @@ def _b2(valid8: set[str]) -> Arm:
     return B2EncoderArm()
 
 
+def _r1(valid8: set[str]) -> Arm:
+    from hs_rag_classifier.arms.r1_hybrid import R1HybridArm
+
+    return R1HybridArm()
+
+
 ARMS = {
     "oracle": lambda valid8: OracleArm(),
     "random": lambda valid8: RandomArm(sorted(valid8)),
@@ -103,6 +109,7 @@ ARMS = {
     "b1": _b1,
     "b1ex": _b1ex,
     "b2": _b2,
+    "r1": _r1,
 }
 
 

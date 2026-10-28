@@ -1,0 +1,51 @@
+{
+  "sources": {
+    "keyword": {
+      "path": "configs/b0_bm25.json",
+      "sha256": "575e1a6914be3f63703c446126292b0da05c4c13a411cc564b12e4235ce39db5"
+    },
+    "tariff_embed": {
+      "path": "configs/b1_embed.json",
+      "sha256": "830d9333574b09d8ccfc985d4da6836f170a38737da56a98b6843d223d14807a"
+    },
+    "rulings": {
+      "path": "configs/b1ex_embed.json",
+      "sha256": "75e3cf9410741ee7c7ef45037ddf31ccd58a09fb667d5dfca26f13d956d6d10f"
+    }
+  },
+  "source_depth": 100,
+  "k_rrf": 10,
+  "weights": {
+    "keyword": 0.25,
+    "tariff_embed": 0.25,
+    "rulings": 0.5
+  },
+  "k": 10,
+  "nomenclature_version": "v4.0.1633",
+  "objective": "recall at 20 (8 digits), ties by recall at 10",
+  "k_choice": {
+    "k": 10,
+    "knee_k": 50,
+    "budget_binds": true,
+    "ks": [
+      10,
+      20,
+      30,
+      40,
+      50
+    ],
+    "min_gain": 0.01
+  },
+  "token_budget": 2000,
+  "candidate_line": "cn8: path_text, one per line",
+  "tokenizer": {
+    "source": "Hugging Face tokenizer",
+    "hf_id": "Qwen/Qwen3.5-9B",
+    "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
+  },
+  "r1_temperature": 0.01639522,
+  "rulings_val_refs_sha256": "e2c809e78c3654d47f7b0ffea5d805ec22f283746da1cc15d8140548d830ecb0",
+  "rulings_test_refs_sha256": "426e6288fda6d8f3bce15198f776f84ddffce16f1b9dc5e6893c7ee5c6371695",
+  "tuned_on": "rulings val (splits/rulings_v1/val_refs.txt)",
+  "limitation": "Tuned on rulings validation only (paragraph descriptions); no short-query validation set exists, since A to Z is test only."
+}
