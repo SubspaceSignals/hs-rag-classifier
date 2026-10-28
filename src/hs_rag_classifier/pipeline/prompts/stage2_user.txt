@@ -1,0 +1,8 @@
+<description>
+{description}
+</description>
+{profile}
+Subheading {hs6}: {hs6_text}
+
+Options:
+{options}

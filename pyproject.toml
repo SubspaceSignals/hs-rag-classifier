@@ -23,6 +23,10 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
 ]
+llm = [
+    "langchain-openai>=1.7.3",
+    "langgraph>=1.2.18",
+]
 # GPU embedding stack (B1, B1-ex): torch from the CUDA 12.8 index for the RTX 5070 Ti (sm_120).
 # Kept out of the base dependencies; the base package imports without it.
 ml = [

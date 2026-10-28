@@ -28,6 +28,7 @@ Rules:
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Callable, Sequence
 
@@ -139,6 +140,7 @@ def score(
             "rationale": p.rationale,
             "tokens_in": p.tokens_in,
             "tokens_out": p.tokens_out,
+            "details": json.dumps(p.details, default=str) if p.details is not None else None,
             "latency_s": latencies[n] if latencies is not None else math.nan,
         }
         for d in DEPTHS:
@@ -357,4 +359,49 @@ def compute_metrics(
                 frame, headline_stats(review_rate, max_depth), n_resamples, seed
             ),
         },
+    }
+
+
+def paired_difference(
+    a: pd.DataFrame,
+    b: pd.DataFrame,
+    col: str = "correct_8",
+    n_resamples: int = BOOTSTRAP_RESAMPLES,
+    seed: int = BOOTSTRAP_SEED,
+) -> dict[str, float]:
+    """Mean of col in a minus b on the same items, with a paired cluster-bootstrap interval.
+
+    Both frames must score exactly the same items with the same clusters. Each resample draws
+    clusters with replacement and takes the difference of the two means over the same rows, so
+    the interval reflects the pairing. NaN rows (deeper than the label) are left out of both.
+    """
+    if set(a["item_id"]) != set(b["item_id"]) or len(a) != len(b):
+        raise ValueError("paired comparison needs the same items in both runs")
+    m = a[["item_id", "cluster_id", col]].merge(
+        b[["item_id", "cluster_id", col]], on="item_id", suffixes=("_a", "_b")
+    )
+    if (m["cluster_id_a"] != m["cluster_id_b"]).any():
+        raise ValueError("the two runs disagree on clusters")
+    frame = pd.DataFrame({"cluster_id": m["cluster_id_a"], "a": m[f"{col}_a"], "b": m[f"{col}_b"]})
+    keep = frame["a"].notna() & frame["b"].notna()
+    frame = frame[keep].reset_index(drop=True)
+    stats = {
+        "diff": lambda x: float(x["a"].mean() - x["b"].mean()),
+        "a": lambda x: float(x["a"].mean()),
+        "b": lambda x: float(x["b"].mean()),
+    }
+    samples = bootstrap_samples(frame, stats, n_resamples, seed)
+    d = samples["diff"]
+    return {
+        "metric": col,
+        "n_items": len(frame),
+        "n_clusters": int(frame["cluster_id"].nunique()),
+        "a": stats["a"](frame),
+        "b": stats["b"](frame),
+        "diff": stats["diff"](frame),
+        "low": float(np.percentile(d, 2.5)),
+        "high": float(np.percentile(d, 97.5)),
+        "share_resamples_le_0": float((d <= 0).mean()),
+        "resamples": n_resamples,
+        "seed": seed,
     }

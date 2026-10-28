@@ -29,4 +29,5 @@ The full plan, decisions log and session log live in the project handoff one lev
 ## Environment
 
 - Python 3.12 managed with uv. Run `uv sync`, then `uv run pytest`.
+- Decider server: `~/llama.cpp/build/bin/llama-server -hf unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL -ngl 99 -c 16384 --port 8080 --jinja --cache-ram 0`. Keep `--cache-ram 0`: the default 8 GB host-RAM prompt cache grows about 250 MB per item and gets llama-server OOM-killed on this 14 GiB machine.
 - The project folder sits on a Windows (NTFS) drive. Keep the virtual environment, model files and data on the Linux drive: set `UV_PROJECT_ENVIRONMENT` outside the repo on the host (the dev container does this already), and keep models under `~/.cache/huggingface` or `~/models`.

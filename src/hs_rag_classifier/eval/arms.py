@@ -36,6 +36,7 @@ class Prediction(BaseModel):
     rationale: str | None = None
     tokens_in: int | None = None
     tokens_out: int | None = None
+    details: dict[str, Any] | None = None  # arm-specific diagnostics (JSON in the scored frame)
 
     @field_validator("candidates")
     @classmethod

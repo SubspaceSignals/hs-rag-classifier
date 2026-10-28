@@ -1,0 +1,126 @@
+{
+  "profile": false,
+  "evidence": true,
+  "evidence_k": 3,
+  "evidence_chars": 300,
+  "max_input_chars": 1000,
+  "token_budget": 4000,
+  "rationale_chars": 400,
+  "profile_field_chars": 80,
+  "max_tokens": {
+    "profile": 200,
+    "decide": 260
+  },
+  "client": {
+    "temperature": 0,
+    "seed": 20261020,
+    "enable_thinking": false,
+    "base_url": "http://localhost:8080"
+  },
+  "m": 42,
+  "labels": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "a",
+    "b",
+    "c",
+    "d",
+    "e",
+    "f",
+    "g",
+    "h",
+    "i",
+    "j",
+    "k",
+    "l",
+    "m",
+    "n",
+    "o",
+    "p",
+    "q",
+    "r",
+    "s",
+    "t",
+    "u",
+    "v",
+    "w",
+    "x",
+    "y",
+    "z"
+  ],
+  "server": {
+    "hf_repo": "unsloth/Qwen3.5-9B-GGUF",
+    "quantisation": "UD-Q4_K_XL",
+    "command": "~/llama.cpp/build/bin/llama-server -hf unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL -ngl 99 -c 16384 --port 8080 --jinja --cache-ram 0",
+    "cache_ram_mib": 0,
+    "n_ctx": 16384,
+    "llama_cpp_build": "b11510-c35b66744",
+    "model_file": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
+    "model_snapshot": "3885219b6810b007914f3a7950a8d1b469d598a5",
+    "model_sha256": "6f5d30666c2d8ae16a306e616d95341dcf3cc46810df84d7e6f5a7d1e4c1b293",
+    "n_slots": 4,
+    "n_ctx_slot": 16384,
+    "labels_rejected": []
+  },
+  "retriever_config": {
+    "path": "configs/hybrid_retrieval.json",
+    "sha256": "be9104f460ecc08947edae6059ca67686eaee0e3ce5b303214b5a12cdb2234ed"
+  },
+  "prompts": {
+    "profile_system": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/profile_system.txt",
+      "sha256": "97e86fc9b51e55beacd8cca281532057c49c7cc7d9c004786f26ae212ae26080"
+    },
+    "profile_user": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/profile_user.txt",
+      "sha256": "e2fa9ad49b9bcccc8b960f4f7812d883a6ec64ed949da3d99d8a454ff9c06392"
+    },
+    "stage1_system": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/stage1_system.txt",
+      "sha256": "a57afdf0e8b48503da04c172ab4f057487c148597f8ed02f0a430368dcdc11fc"
+    },
+    "stage1_user": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/stage1_user.txt",
+      "sha256": "ae1c3382926ad2279d3f36c67a4c71ed594b36a21fd6201b568dff9e5616a541"
+    },
+    "stage2_system": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/stage2_system.txt",
+      "sha256": "3d242f9e0a06d268f9e38b15c99a839ff1fdc354bf51e3ecbb4ab117bf7cecaa"
+    },
+    "stage2_user": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/stage2_user.txt",
+      "sha256": "28bc119aa3928fcee566f5bbfb2b5d75ab1c09bb6209363b417625f81007b402"
+    }
+  },
+  "val_sample": {
+    "path": "configs/a1_val_sample_ids.txt",
+    "sha256": "5da79b507721d662d04214c21ac70ffc1ddbe491575fb5157af37ddc2a272942",
+    "n": 300,
+    "seed": 20261020
+  },
+  "choice": "Chosen on the 300-item val sample by top-1 at 8 digits: profile off, evidence on 0.503 [0.447, 0.557] vs off/off 0.283, on/off 0.273, on/on 0.440 (runs 48c68fe2, 722881a1, 7e403aeb, 386ede9b)"
+}

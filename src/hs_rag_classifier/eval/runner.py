@@ -14,6 +14,14 @@ eval depth min(8, max_depth), and the run is tagged eval_depth.
 Test guard: a test-split run refuses a dirty git tree (untracked files included), --limit,
 and sanity arms. Every test run is appended to ~/data/hs-rag-classifier/eval/test_runs.jsonl
 as soon as its MLflow run exists, so a run that fails part-way is still counted.
+
+Resumable runs: predictions are appended to ~/data/hs-rag-classifier/eval/partial/<run_id>.jsonl
+after each predict call (with their latency), so a run that stops part-way keeps its finished
+items. resume=<run_id> reopens that MLflow run and predicts only the items not yet in the file.
+It must match the run's arm, config hash, dataset, split, split SHA-256, ablation and limit,
+and on a test split also its git commit; the guard still applies. A resumed test run is the
+same test run: no new line in test_runs.jsonl. Throughput then counts predict time only (the
+sum of item latencies over every session).
 """
 
 from __future__ import annotations
@@ -33,7 +41,7 @@ import pandas as pd
 
 from hs_rag_classifier.data.rulings import NOMENCLATURE_VERSION
 from hs_rag_classifier.eval import metrics as M
-from hs_rag_classifier.eval.arms import Arm, OracleArm, RandomArm, config_hash
+from hs_rag_classifier.eval.arms import Arm, OracleArm, Prediction, RandomArm, config_hash
 from hs_rag_classifier.eval.items import DATA_ROOT, REPO_ROOT, EvalSet
 from hs_rag_classifier.eval.plots import coverage_plot, reliability_plot
 
@@ -42,6 +50,7 @@ import mlflow
 
 MLFLOW_DIR = DATA_ROOT / "mlflow"
 TEST_LOG = DATA_ROOT / "eval" / "test_runs.jsonl"
+PARTIAL_DIR = TEST_LOG.parent / "partial"
 
 
 class GuardError(RuntimeError):
@@ -102,6 +111,12 @@ def _r1(valid8: set[str]) -> Arm:
     return R1HybridArm()
 
 
+def _a1(valid8: set[str]) -> Arm:
+    from hs_rag_classifier.arms.a1_pipeline import A1PipelineArm
+
+    return A1PipelineArm()
+
+
 ARMS = {
     "oracle": lambda valid8: OracleArm(),
     "random": lambda valid8: RandomArm(sorted(valid8)),
@@ -110,6 +125,7 @@ ARMS = {
     "b1ex": _b1ex,
     "b2": _b2,
     "r1": _r1,
+    "a1": _a1,
 }
 
 
@@ -130,8 +146,13 @@ def check_test_guard(arm: Arm, evalset: EvalSet, git: dict, limit: int | None) -
         raise GuardError("the git tree is dirty; commit or stash before a test-split run")
 
 
-def predict_all(arm: Arm, items: list) -> tuple[list, list[float], float]:
-    """Predictions, per-item latency (each call's time split over its batch), total seconds."""
+def predict_all(
+    arm: Arm, items: list, sink: Path | None = None, progress: int = 0
+) -> tuple[list, list[float], float]:
+    """Predictions, per-item latency (each call's time split over its batch), total seconds.
+
+    With sink, each batch's predictions are appended to that JSONL file as soon as they exist.
+    """
     size = max(1, int(getattr(arm, "batch_size", 1)))
     preds, latencies, total = [], [], 0.0
     for start in range(0, len(items), size):
@@ -144,7 +165,55 @@ def predict_all(arm: Arm, items: list) -> tuple[list, list[float], float]:
         total += elapsed
         preds.extend(out)
         latencies.extend([elapsed / len(batch)] * len(batch))
+        if sink is not None:
+            write_partial(sink, out, latencies[-len(out) :])
+        if progress and (start // size + 1) % progress == 0:
+            print(f"  {start + len(batch):,} of {len(items):,} items, "
+                  f"{total / (start + len(batch)):.2f} s per item", flush=True)  # fmt: skip
     return preds, latencies, total
+
+
+def write_partial(sink: Path, preds: list[Prediction], latencies: list[float]) -> None:
+    with sink.open("a", encoding="utf-8") as fh:
+        for p, lat in zip(preds, latencies, strict=True):
+            fh.write(json.dumps({"prediction": p.model_dump(), "latency_s": lat}) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
+def read_partial(sink: Path) -> tuple[list[Prediction], list[float]]:
+    """Predictions and latencies saved so far; a cut-off last line (a crash mid-write) is skipped."""
+    preds, latencies = [], []
+    if not sink.exists():
+        return preds, latencies
+    lines = sink.read_text(encoding="utf-8").splitlines()
+    for n, line in enumerate(lines):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            if n == len(lines) - 1:
+                break
+            raise
+        preds.append(Prediction.model_validate(row["prediction"]))
+        latencies.append(float(row["latency_s"]))
+    return preds, latencies
+
+
+def check_resume(run, arm: Arm, evalset: EvalSet, chash: str, git: dict,
+                 limit: int | None) -> None:  # fmt: skip
+    """Refuse a resume that does not continue the same run (rule in the module docstring)."""
+    params, tags = run.data.params, run.data.tags
+    expected = {"arm": arm.name, "config_hash": chash, "limit": str(limit)}
+    expected_tags = {"dataset": evalset.dataset, "split": evalset.split,
+                     "split_sha256": evalset.split_sha256, "ablation": evalset.ablation}  # fmt: skip
+    if evalset.split == "test":
+        expected_tags["git_commit"] = git["commit"]
+    wrong = [k for k, v in expected.items() if params.get(k) != v]
+    wrong += [k for k, v in expected_tags.items() if tags.get(k) != v]
+    if wrong:
+        raise GuardError(f"run {run.info.run_id} does not match this run: {', '.join(wrong)}")
+    if run.info.status == "FINISHED" and "n_items" in run.data.metrics:
+        raise GuardError(f"run {run.info.run_id} already finished")
 
 
 def flat_metrics(m: dict) -> dict[str, float]:
@@ -184,8 +253,16 @@ def run_eval(
     git: dict | None = None,
     n_resamples: int = M.BOOTSTRAP_RESAMPLES,
     tags: dict[str, str] | None = None,
+    resume: str | None = None,
+    partial_dir: Path | None = None,
+    progress: int = 0,
 ) -> dict[str, Any]:
-    """Guard, predict, score, log. Returns run_id, metrics and the scored frame."""
+    """Guard, predict, score, log. Returns run_id, metrics and the scored frame.
+
+    resume: an earlier run id to continue (see Resumable runs in the module docstring).
+    partial_dir: where partial predictions go; default "partial" next to test_log.
+    """
+    partial_dir = partial_dir or test_log.parent / "partial"
     git = git if git is not None else git_info()
     check_test_guard(arm, evalset, git, limit)
     items = evalset.items[:limit] if limit is not None else evalset.items
@@ -198,9 +275,16 @@ def run_eval(
     exp_id = _experiment_id(experiment, mlflow_dir / "artifacts")
     chash = config_hash(arm.config)
     max_depth = int(getattr(arm, "max_depth", M.FULL_DEPTH))
-    with mlflow.start_run(experiment_id=exp_id, run_name=f"{arm.name}-{evalset.split}") as run:
+    if resume is not None:
+        check_resume(mlflow.get_run(resume), arm, evalset, chash, git, limit)
+        start = {"run_id": resume}
+    else:
+        start = {"experiment_id": exp_id, "run_name": f"{arm.name}-{evalset.split}"}
+    with mlflow.start_run(**start) as run:
         run_id = run.info.run_id
-        if evalset.split == "test":
+        partial_dir.mkdir(parents=True, exist_ok=True)
+        sink = partial_dir / f"{run_id}.jsonl"
+        if resume is None and evalset.split == "test":
             test_log.parent.mkdir(parents=True, exist_ok=True)
             line = {
                 "time": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -213,32 +297,46 @@ def run_eval(
             }
             with test_log.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(line) + "\n")
-        mlflow.log_params(
-            {
-                "arm": arm.name,
-                "config": json.dumps(arm.config, sort_keys=True, default=str),
-                "config_hash": chash,
-                "limit": limit,
-                "headline_review_rate": review_rate,
-                "bootstrap_resamples": n_resamples,
-            }
-        )
-        mlflow.set_tags(
-            {
-                "git_commit": git["commit"],
-                "git_dirty": str(git["dirty"]).lower(),
-                "dataset": evalset.dataset,
-                "split": evalset.split,
-                "split_file": evalset.split_file,
-                "split_sha256": evalset.split_sha256,
-                "nomenclature_version": NOMENCLATURE_VERSION,
-                "ablation": evalset.ablation,
-                "sanity_arm": str(bool(getattr(arm, "sanity", False))).lower(),
-                "eval_depth": str(M.eval_depth(max_depth)),
-                **(tags or {}),
-            }
-        )
-        preds, latencies, total = predict_all(arm, items)
+        if resume is not None:
+            done, done_lat = read_partial(sink)
+            ids = {i.item_id for i in items}
+            if any(p.item_id not in ids for p in done):
+                raise GuardError(f"{sink} holds items that are not in this set")
+            mlflow.set_tag("resumed_items", str(len(done)))
+        else:
+            done, done_lat = [], []
+            mlflow.log_params(
+                {
+                    "arm": arm.name,
+                    "config": json.dumps(arm.config, sort_keys=True, default=str),
+                    "config_hash": chash,
+                    "limit": limit,
+                    "headline_review_rate": review_rate,
+                    "bootstrap_resamples": n_resamples,
+                }
+            )
+            mlflow.set_tags(
+                {
+                    "git_commit": git["commit"],
+                    "git_dirty": str(git["dirty"]).lower(),
+                    "dataset": evalset.dataset,
+                    "split": evalset.split,
+                    "split_file": evalset.split_file,
+                    "split_sha256": evalset.split_sha256,
+                    "nomenclature_version": NOMENCLATURE_VERSION,
+                    "ablation": evalset.ablation,
+                    "sanity_arm": str(bool(getattr(arm, "sanity", False))).lower(),
+                    "eval_depth": str(M.eval_depth(max_depth)),
+                    **(tags or {}),
+                }
+            )
+        finished = {p.item_id for p in done}
+        todo = [i for i in items if i.item_id not in finished]
+        new, new_lat, _ = predict_all(arm, todo, sink, progress)
+        by_id = {p.item_id: (p, lat) for p, lat in zip(done + new, done_lat + new_lat, strict=True)}
+        preds = [by_id[i.item_id][0] for i in items]
+        latencies = [by_id[i.item_id][1] for i in items]
+        total = float(sum(latencies))
         frame = M.score(items, preds, valid8, valid10, latencies, max_depth)
         metrics = M.compute_metrics(frame, total, review_rate, n_resamples, max_depth=max_depth)
         mlflow.log_metrics(flat_metrics(metrics))
@@ -304,3 +402,13 @@ def read_test_runs(path: Path = TEST_LOG) -> list[dict]:
 
 def count_test_runs(runs: list[dict]) -> Counter:
     return Counter(r["arm"] for r in runs)
+
+
+def load_run_frame(run_id: str, mlflow_dir: Path = MLFLOW_DIR) -> pd.DataFrame:
+    """The scored frame (predictions.parquet) a finished run logged."""
+    mlflow.set_tracking_uri(tracking_uri(mlflow_dir))
+    with tempfile.TemporaryDirectory() as tmp:
+        path = mlflow.artifacts.download_artifacts(
+            run_id=run_id, artifact_path="predictions.parquet", dst_path=tmp
+        )
+        return pd.read_parquet(path)

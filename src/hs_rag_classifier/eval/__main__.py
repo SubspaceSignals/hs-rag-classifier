@@ -22,7 +22,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     arm = R.make_arm(args.arm, valid8)
     try:
         result = R.run_eval(arm, evalset, valid8, valid10, limit=args.limit,
-                            review_rate=args.review_rate)  # fmt: skip
+                            review_rate=args.review_rate, resume=args.resume,
+                            progress=args.progress)  # fmt: skip
     except R.GuardError as exc:
         print(f"Refused: {exc}", file=sys.stderr)
         return 2
@@ -53,6 +54,14 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--limit", type=int, help="first N items (not allowed on test)")
     run.add_argument("--review-rate", type=float, default=HEADLINE_REVIEW_RATE,
                      help="review rate for the headline metric")  # fmt: skip
+    run.add_argument(
+        "--resume",
+        metavar="RUN_ID",
+        help="continue an interrupted run under the same MLflow run id",
+    )
+    run.add_argument(
+        "--progress", type=int, default=0, metavar="N", help="print progress every N predict calls"
+    )
     run.add_argument("--root", type=Path, default=DATA_ROOT, help="data directory")
     run.set_defaults(func=cmd_run)
     tr = sub.add_parser("test-runs", help="list logged test-set runs and the count per arm")
