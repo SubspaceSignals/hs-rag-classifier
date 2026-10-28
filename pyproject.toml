@@ -28,6 +28,7 @@ dev = [
 ml = [
     "torch>=2.7",
     "sentence-transformers>=4.1",
+    "transformers>=5.21",
 ]
 
 [tool.uv.sources]

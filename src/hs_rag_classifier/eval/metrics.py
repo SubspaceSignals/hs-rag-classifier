@@ -20,6 +20,10 @@ Rules:
     bootstrap     resamples clusters, not rows: each resample draws as many clusters as there
                   are, with replacement, and keeps every row of each drawn cluster. 95%
                   percentile intervals; the seed is fixed.
+    max depth     an arm may predict to fewer digits (max_depth, default 10). Top-1 deeper than
+                  max_depth is n/a (NaN, n 0), never 0. The eval depth is min(8, max_depth):
+                  recall at k, ECE, the coverage curve and the headline use it instead of 8.
+                  A 6-digit code is valid when it is the first 6 digits of a current cn8.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ from hs_rag_classifier.eval.arms import Prediction
 from hs_rag_classifier.eval.items import EvalItem
 
 DEPTHS = (2, 4, 6, 8, 10)
+FULL_DEPTH = 10
 RECALL_KS = (3, 10)
 DIAGNOSTIC_RECALL_KS = (20, 50)
 ECE_BINS = 15
@@ -43,9 +48,18 @@ BOOTSTRAP_RESAMPLES = 1000
 BOOTSTRAP_SEED = 20261021
 
 
-def is_valid(code: str | None, valid8: set[str], valid10: set[str]) -> bool:
+def eval_depth(max_depth: int = FULL_DEPTH) -> int:
+    """Depth for recall, ECE, coverage and the headline: 8, or the arm's max depth if lower."""
+    return min(8, max_depth)
+
+
+def is_valid(
+    code: str | None, valid8: set[str], valid10: set[str], valid6: set[str] | None = None
+) -> bool:
     if code is None:
         return False
+    if len(code) == 6 and valid6 is not None:
+        return code in valid6
     if len(code) == 8:
         return code in valid8
     if len(code) == 10:
@@ -53,9 +67,16 @@ def is_valid(code: str | None, valid8: set[str], valid10: set[str]) -> bool:
     return False
 
 
-def correct_at(code: str | None, valid: bool, label: str, label_depth: int, d: int) -> float:
-    """1.0 or 0.0 at d digits; NaN when d is deeper than the label."""
-    if d > label_depth:
+def correct_at(
+    code: str | None,
+    valid: bool,
+    label: str,
+    label_depth: int,
+    d: int,
+    max_depth: int = FULL_DEPTH,
+) -> float:
+    """1.0 or 0.0 at d digits; NaN when d is deeper than the label or the arm's max depth."""
+    if d > label_depth or d > max_depth:
         return math.nan
     if code is None or not valid or len(code) < d:
         return 0.0
@@ -63,10 +84,20 @@ def correct_at(code: str | None, valid: bool, label: str, label_depth: int, d: i
 
 
 def recall_at(
-    codes: Sequence[str], label: str, k: int, valid8: set[str], valid10: set[str]
+    codes: Sequence[str],
+    label: str,
+    k: int,
+    valid8: set[str],
+    valid10: set[str],
+    depth: int = 8,
+    valid6: set[str] | None = None,
 ) -> float:
     return float(
-        any(is_valid(c, valid8, valid10) and c[:8] == label[:8] for c in codes[:k] if len(c) >= 8)
+        any(
+            is_valid(c, valid8, valid10, valid6) and c[:depth] == label[:depth]
+            for c in codes[:k]
+            if len(c) >= depth
+        )
     )
 
 
@@ -76,17 +107,23 @@ def score(
     valid8: set[str],
     valid10: set[str],
     latencies: Sequence[float] | None = None,
+    max_depth: int = FULL_DEPTH,
 ) -> pd.DataFrame:
-    """One row per item: label, top-1, validity, correctness by depth, recall, confidence."""
+    """One row per item: label, top-1, validity, correctness by depth, recall, confidence.
+
+    Recall columns are at the eval depth (8, or max_depth if lower).
+    """
     by_id = {p.item_id: p for p in predictions}
     if set(by_id) != {i.item_id for i in items} or len(by_id) != len(predictions):
         raise ValueError("predictions must cover every item exactly once")
+    depth = eval_depth(max_depth)
+    valid6 = {c[:6] for c in valid8} if max_depth < 8 else None
     rows = []
     for n, item in enumerate(items):
         p = by_id[item.item_id]
         codes = [c.code for c in p.candidates]
         top1 = codes[0] if codes else None
-        valid = is_valid(top1, valid8, valid10)
+        valid = is_valid(top1, valid8, valid10, valid6)
         row = {
             "item_id": item.item_id,
             "label_code": item.label_code,
@@ -105,9 +142,13 @@ def score(
             "latency_s": latencies[n] if latencies is not None else math.nan,
         }
         for d in DEPTHS:
-            row[f"correct_{d}"] = correct_at(top1, valid, item.label_code, item.label_depth, d)
+            row[f"correct_{d}"] = correct_at(
+                top1, valid, item.label_code, item.label_depth, d, max_depth
+            )
         for k in RECALL_KS + DIAGNOSTIC_RECALL_KS:
-            row[f"recall_{k}"] = recall_at(codes, item.label_code, k, valid8, valid10)
+            row[f"recall_{k}"] = recall_at(
+                codes, item.label_code, k, valid8, valid10, depth, valid6
+            )
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -212,29 +253,34 @@ def latency_stats(latencies: Sequence[float], total_seconds: float) -> dict[str,
     }
 
 
-def per_chapter(frame: pd.DataFrame) -> pd.DataFrame:
-    return (
-        frame.groupby("chapter", sort=True)
-        .agg(n=("item_id", "size"), top1_8=("correct_8", "mean"), recall_10=("recall_10", "mean"))
-        .reset_index()
-    )
+def per_chapter(frame: pd.DataFrame, max_depth: int = FULL_DEPTH) -> pd.DataFrame:
+    """Per chapter: n, top-1 at 8 (and at 6 for a depth-limited arm), recall at 10."""
+    cols = {"n": ("item_id", "size")}
+    if max_depth < 8:
+        cols["top1_6"] = ("correct_6", "mean")
+    cols.update(top1_8=("correct_8", "mean"), recall_10=("recall_10", "mean"))
+    return frame.groupby("chapter", sort=True).agg(**cols).reset_index()
 
 
 Arrays = dict[str, np.ndarray]
 Statistic = Callable[[Arrays], float]
 
 
-def headline_stats(review_rate: float = HEADLINE_REVIEW_RATE) -> dict[str, Statistic]:
+def headline_stats(
+    review_rate: float = HEADLINE_REVIEW_RATE, max_depth: int = FULL_DEPTH
+) -> dict[str, Statistic]:
     """The bootstrapped statistics, as functions of the per-item arrays."""
-    return {
+    c = f"correct_{eval_depth(max_depth)}"
+    stats = {
         "top1_6": lambda a: float(np.nanmean(a["correct_6"])),
         "top1_8": lambda a: float(np.nanmean(a["correct_8"])),
         "recall_3": lambda a: float(a["recall_3"].mean()),
-        "ece": lambda a: ece(a["confidence"], a["correct_8"]),
-        "headline": lambda a: accuracy_at_review(
-            a["confidence"], a["correct_8"], a["abstain"], review_rate
-        ),
+        "ece": lambda a: ece(a["confidence"], a[c]),
+        "headline": lambda a: accuracy_at_review(a["confidence"], a[c], a["abstain"], review_rate),
     }
+    if max_depth < 8:
+        del stats["top1_8"]
+    return stats
 
 
 def bootstrap_samples(
@@ -280,13 +326,17 @@ def compute_metrics(
     review_rate: float = HEADLINE_REVIEW_RATE,
     n_resamples: int = BOOTSTRAP_RESAMPLES,
     seed: int = BOOTSTRAP_SEED,
+    max_depth: int = FULL_DEPTH,
 ) -> dict:
-    """Every metric for one run, JSON-friendly."""
-    conf, c8 = frame["confidence"].to_numpy(float), frame["correct_8"].to_numpy(float)
+    """Every metric for one run, JSON-friendly (correctness at the eval depth; see max depth)."""
+    depth = eval_depth(max_depth)
+    conf, c8 = frame["confidence"].to_numpy(float), frame[f"correct_{depth}"].to_numpy(float)
     abstain = frame["abstain"].to_numpy(bool)
     return {
         "n_items": len(frame),
         "n_clusters": int(frame["cluster_id"].nunique()),
+        "max_depth": max_depth,
+        "eval_depth": depth,
         "top1": top1_accuracy(frame),
         "recall": {k: recall(frame, k) for k in recall_ks(frame)},
         "invalid_rate": invalid_rate(frame),
@@ -303,6 +353,8 @@ def compute_metrics(
             "resamples": n_resamples,
             "seed": seed,
             "unit": "cluster_id",
-            "intervals": bootstrap_intervals(frame, headline_stats(review_rate), n_resamples, seed),
+            "intervals": bootstrap_intervals(
+                frame, headline_stats(review_rate, max_depth), n_resamples, seed
+            ),
         },
     }

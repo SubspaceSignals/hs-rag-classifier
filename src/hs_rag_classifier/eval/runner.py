@@ -7,6 +7,10 @@ MLflow: backend sqlite at ~/data/hs-rag-classifier/mlflow/mlflow.db, artifacts u
 flat metrics, and artifacts: predictions.parquet, metrics.json, per_chapter.csv,
 reliability.png, coverage.png.
 
+Depth-limited arms: an arm may set max_depth (default 10, e.g. 6 for an HS-6 classifier).
+Top-1 above it is reported as n/a; recall, ECE, coverage and the headline are computed at the
+eval depth min(8, max_depth), and the run is tagged eval_depth.
+
 Test guard: a test-split run refuses a dirty git tree (untracked files included), --limit,
 and sanity arms. Every test run is appended to ~/data/hs-rag-classifier/eval/test_runs.jsonl
 as soon as its MLflow run exists, so a run that fails part-way is still counted.
@@ -86,12 +90,19 @@ def _b1ex(valid8: set[str]) -> Arm:
     return B1exEmbedArm()
 
 
+def _b2(valid8: set[str]) -> Arm:
+    from hs_rag_classifier.arms.b2_encoder import B2EncoderArm
+
+    return B2EncoderArm()
+
+
 ARMS = {
     "oracle": lambda valid8: OracleArm(),
     "random": lambda valid8: RandomArm(sorted(valid8)),
     "b0": _b0,
     "b1": _b1,
     "b1ex": _b1ex,
+    "b2": _b2,
 }
 
 
@@ -134,7 +145,7 @@ def flat_metrics(m: dict) -> dict[str, float]:
     for d, v in m["top1"].items():
         out[f"top1_{d}"], out[f"n_{d}"] = v["accuracy"], v["n"]
     for k, v in m["recall"].items():
-        out[f"recall_{k}_8digit"] = v
+        out[f"recall_{k}_{m.get('eval_depth', 8)}digit"] = v
     for key in ("invalid_rate", "no_top1_rate", "abstain_rate", "ece", "headline"):
         out[key] = m[key]
     for c in m["coverage"]:
@@ -179,6 +190,7 @@ def run_eval(
     experiment = f"eval-{evalset.dataset}"
     exp_id = _experiment_id(experiment, mlflow_dir / "artifacts")
     chash = config_hash(arm.config)
+    max_depth = int(getattr(arm, "max_depth", M.FULL_DEPTH))
     with mlflow.start_run(experiment_id=exp_id, run_name=f"{arm.name}-{evalset.split}") as run:
         run_id = run.info.run_id
         if evalset.split == "test":
@@ -215,12 +227,13 @@ def run_eval(
                 "nomenclature_version": NOMENCLATURE_VERSION,
                 "ablation": evalset.ablation,
                 "sanity_arm": str(bool(getattr(arm, "sanity", False))).lower(),
+                "eval_depth": str(M.eval_depth(max_depth)),
                 **(tags or {}),
             }
         )
         preds, latencies, total = predict_all(arm, items)
-        frame = M.score(items, preds, valid8, valid10, latencies)
-        metrics = M.compute_metrics(frame, total, review_rate, n_resamples)
+        frame = M.score(items, preds, valid8, valid10, latencies, max_depth)
+        metrics = M.compute_metrics(frame, total, review_rate, n_resamples, max_depth=max_depth)
         mlflow.log_metrics(flat_metrics(metrics))
         label = f"{arm.name}, {evalset.dataset} {evalset.split}"
         with tempfile.TemporaryDirectory() as tmp:
@@ -229,7 +242,7 @@ def run_eval(
             (out / "metrics.json").write_text(
                 json.dumps(metrics, indent=2, default=str), encoding="utf-8"
             )
-            M.per_chapter(frame).to_csv(out / "per_chapter.csv", index=False)
+            M.per_chapter(frame, max_depth).to_csv(out / "per_chapter.csv", index=False)
             reliability_plot(metrics["reliability"], metrics["ece"], label, out / "reliability.png")
             coverage_plot(metrics["coverage"], review_rate, label, out / "coverage.png")
             mlflow.log_artifacts(str(out))
@@ -245,6 +258,7 @@ def summary_lines(result: dict, arm: Arm, evalset: EvalSet) -> list[str]:
     ci = m["bootstrap"]["intervals"]
     top1 = "  ".join(f"{d}: {_fmt(v['accuracy'])} (n {v['n']})" for d, v in m["top1"].items())
     lat = m["latency"]
+    d = m.get("eval_depth", 8)
     return [
         (
             f"Run {result['run_id']} ({result['experiment']}): arm {arm.name} "
@@ -253,16 +267,17 @@ def summary_lines(result: dict, arm: Arm, evalset: EvalSet) -> list[str]:
         ),
         f"  top-1  {top1}",
         (
-            f"  top-1 at 8: {_fmt(m['top1'][8]['accuracy'])} "
-            f"[{_fmt(ci['top1_8']['low'])}, {_fmt(ci['top1_8']['high'])}]; "
-            f"recall at " + ", ".join(f"{k}: {_fmt(v)}" for k, v in m["recall"].items())
+            f"  top-1 at {d}: {_fmt(m['top1'][d]['accuracy'])} "
+            f"[{_fmt(ci[f'top1_{d}']['low'])}, {_fmt(ci[f'top1_{d}']['high'])}]; "
+            f"recall {'' if d == 8 else f'({d} digits) '}at "
+            + ", ".join(f"{k}: {_fmt(v)}" for k, v in m["recall"].items())
         ),
         (
             f"  invalid rate {_fmt(m['invalid_rate'])}; abstain rate {_fmt(m['abstain_rate'])}; "
             f"ECE {_fmt(m['ece'])} [{_fmt(ci['ece']['low'])}, {_fmt(ci['ece']['high'])}]"
         ),
         (
-            f"  headline (8-digit accuracy at {m['headline_review_rate']:.0%} review): "
+            f"  headline ({d}-digit accuracy at {m['headline_review_rate']:.0%} review): "
             f"{_fmt(m['headline'])} "
             f"[{_fmt(ci['headline']['low'])}, {_fmt(ci['headline']['high'])}]; "
             f"at 0% review: {_fmt(m['coverage'][0]['accuracy'])}"
