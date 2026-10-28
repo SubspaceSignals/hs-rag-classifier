@@ -23,6 +23,20 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
 ]
+# GPU embedding stack (B1, B1-ex): torch from the CUDA 12.8 index for the RTX 5070 Ti (sm_120).
+# Kept out of the base dependencies; the base package imports without it.
+ml = [
+    "torch>=2.7",
+    "sentence-transformers>=4.1",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]

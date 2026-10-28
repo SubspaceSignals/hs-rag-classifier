@@ -74,10 +74,24 @@ def _b0(valid8: set[str]) -> Arm:
     return B0BM25Arm()
 
 
+def _b1(valid8: set[str]) -> Arm:
+    from hs_rag_classifier.arms.b1_embed import B1EmbedArm
+
+    return B1EmbedArm()
+
+
+def _b1ex(valid8: set[str]) -> Arm:
+    from hs_rag_classifier.arms.b1ex_embed import B1exEmbedArm
+
+    return B1exEmbedArm()
+
+
 ARMS = {
     "oracle": lambda valid8: OracleArm(),
     "random": lambda valid8: RandomArm(sorted(valid8)),
     "b0": _b0,
+    "b1": _b1,
+    "b1ex": _b1ex,
 }
 
 

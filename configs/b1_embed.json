@@ -1,0 +1,16 @@
+{
+  "model": "bge-m3",
+  "hf_id": "BAAI/bge-m3",
+  "revision": "5617a9f61b028005a4858fdac845db406aefb181",
+  "dtype": "float16",
+  "max_length": 512,
+  "query_instruction": "",
+  "normalise": true,
+  "similarity": "dot (cosine)",
+  "temperature": 0.0663,
+  "documents": "current declarable 10-digit lines; text = path_text (chapter down to the line)",
+  "nomenclature_version": "v4.0.1633",
+  "candidate_cap": 50,
+  "softmax_top": 10,
+  "tuned_on": "rulings val (splits/rulings_v1/val_refs.txt)"
+}

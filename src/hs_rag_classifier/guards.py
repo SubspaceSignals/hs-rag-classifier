@@ -32,3 +32,14 @@ def check_retrieval_inputs(paths: Iterable[Path | str], root: Path | str) -> lis
                 raise ForbiddenInputError(f"{p} is under {f}: test-only data, never an input")
         checked.append(Path(p))
     return checked
+
+
+def check_train_split_only(path: Path | str, train_file: Path | str) -> Path:
+    """Return path, or raise unless it is exactly the rulings train split file.
+
+    For indexes built from rulings (B1-ex): validation, test and the justifications file sit
+    next to train.parquet and must never be read by an index builder.
+    """
+    if Path(path).resolve() != Path(train_file).resolve():
+        raise ForbiddenInputError(f"{path} is not the train split file {train_file}")
+    return Path(path)
