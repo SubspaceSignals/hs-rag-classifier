@@ -1,0 +1,10 @@
+<description>
+{description}
+</description>
+{profile}
+Subheading {hs6}: {hs6_text}
+
+Options:
+{options}
+
+Answer with the label of the best option only.

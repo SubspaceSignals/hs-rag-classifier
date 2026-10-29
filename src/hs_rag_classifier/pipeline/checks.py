@@ -117,3 +117,16 @@ def verify_labels(
         if len(alone) == 1 and after == [*base, alone[0]]:
             ok.append(label)
     return ok
+
+
+QUOTE_MARKS = "'\"‘’“”"
+
+
+def quote_check(quote: str, text: str) -> dict:
+    """A2 rationale: the quote must appear in the tariff text given (same comparison as
+    citation_check: case-insensitive, whitespace collapsed, ellipsis fragments each found)."""
+    q = _norm(quote or "").strip(QUOTE_MARKS + " .,;:")
+    frags = [f.strip(QUOTE_MARKS + " .,;:") for f in re.split(r"\.\.\.|…", q)]
+    frags = [f for f in frags if f]
+    t = _norm(text)
+    return {"quote": q, "pass": bool(frags) and all(f in t for f in frags)}

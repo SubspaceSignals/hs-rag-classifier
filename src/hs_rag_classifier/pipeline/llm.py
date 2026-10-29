@@ -111,3 +111,30 @@ class ServerInfo:
             "chat_template_kwargs": {"enable_thinking": enable_thinking}})  # fmt: skip
         r.raise_for_status()
         return len(self.tokenize(r.json()["prompt"]))
+
+
+def score_call(http: httpx.Client, client: dict[str, Any], system: str, user: str,
+               top_logprobs: int) -> dict:  # fmt: skip
+    """A2 scoring: one generated token, no grammar or schema, with the top_logprobs most likely
+    next tokens (log-probabilities before sampling). {"token", "top", "tokens_in", "tokens_out",
+    "seconds"}; top is [{"token", "logprob"}, ...]."""
+    body = {
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "max_tokens": 1,
+        "temperature": client["temperature"],
+        "seed": client["seed"],
+        "logprobs": True,
+        "top_logprobs": top_logprobs,
+        "chat_template_kwargs": {"enable_thinking": client["enable_thinking"]},
+    }
+    t0 = time.perf_counter()
+    r = http.post("/v1/chat/completions", json=body)
+    r.raise_for_status()
+    seconds = time.perf_counter() - t0
+    data = r.json()
+    step = data["choices"][0]["logprobs"]["content"][0]
+    usage = data.get("usage") or {}
+    return {"token": step["token"],
+            "top": [{"token": t["token"], "logprob": t["logprob"]} for t in step["top_logprobs"]],
+            "tokens_in": usage.get("prompt_tokens"), "tokens_out": usage.get("completion_tokens"),
+            "seconds": seconds}  # fmt: skip

@@ -405,3 +405,47 @@ def paired_difference(
         "resamples": n_resamples,
         "seed": seed,
     }
+
+
+def paired_review_difference(
+    a: pd.DataFrame,
+    b: pd.DataFrame,
+    rate: float = HEADLINE_REVIEW_RATE,
+    col: str = "correct_8",
+    n_resamples: int = BOOTSTRAP_RESAMPLES,
+    seed: int = BOOTSTRAP_SEED,
+) -> dict[str, float]:
+    """Accuracy at a review rate (each run's own confidence order), a minus b, with a paired
+    cluster-bootstrap interval: each resample draws clusters once and scores both runs on them."""
+    if set(a["item_id"]) != set(b["item_id"]) or len(a) != len(b):
+        raise ValueError("paired comparison needs the same items in both runs")
+    cols = ["item_id", "cluster_id", col, "confidence", "abstain"]
+    m = a[cols].merge(b[cols], on="item_id", suffixes=("_a", "_b"))
+    if (m["cluster_id_a"] != m["cluster_id_b"]).any():
+        raise ValueError("the two runs disagree on clusters")
+    frame = pd.DataFrame({"cluster_id": m["cluster_id_a"],
+                          "ca": m[f"{col}_a"].astype(float), "cb": m[f"{col}_b"].astype(float),
+                          "pa": m["confidence_a"].astype(float),
+                          "pb": m["confidence_b"].astype(float),
+                          "aa": m["abstain_a"].astype(bool), "ab": m["abstain_b"].astype(bool)})  # fmt: skip
+
+    def acc(x: Arrays, s: str) -> float:
+        return accuracy_at_review(x[f"p{s}"], x[f"c{s}"], x[f"a{s}"], rate)
+
+    stats = {"diff": lambda x: acc(x, "a") - acc(x, "b"), "a": lambda x: acc(x, "a"),
+             "b": lambda x: acc(x, "b")}  # fmt: skip
+    arrays = {c: frame[c].to_numpy() for c in frame.columns}
+    d = bootstrap_samples(frame, stats, n_resamples, seed)["diff"]
+    return {
+        "metric": f"accuracy at {rate:.0%} review ({col})",
+        "n_items": len(frame),
+        "n_clusters": int(frame["cluster_id"].nunique()),
+        "a": stats["a"](arrays),
+        "b": stats["b"](arrays),
+        "diff": stats["diff"](arrays),
+        "low": float(np.percentile(d, 2.5)),
+        "high": float(np.percentile(d, 97.5)),
+        "share_resamples_le_0": float((d <= 0).mean()),
+        "resamples": n_resamples,
+        "seed": seed,
+    }

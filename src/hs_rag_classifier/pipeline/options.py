@@ -74,3 +74,11 @@ def load_tariff(root: Path = DATA_ROOT) -> Tariff:
                                                "superseded", "description", "cn8",
                                                "path_sids"])  # fmt: skip
     return build_tariff(codes, pd.read_parquet(paths[1]))
+
+
+def load_cn8_paths(root: Path = DATA_ROOT) -> dict[str, str]:
+    """cn8 -> its full path text, chapter down to the cn8 line (codes8.parquet path_text)."""
+    tariff = root / "processed" / "tariff" / NOMENCLATURE_VERSION
+    (path,) = check_retrieval_inputs([tariff / "codes8.parquet"], root)
+    df = pd.read_parquet(path, columns=["cn8", "path_text"])
+    return dict(zip(df["cn8"], df["path_text"], strict=True))

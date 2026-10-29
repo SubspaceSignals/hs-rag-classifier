@@ -1,0 +1,8 @@
+<description>
+{description}
+</description>
+{profile}{evidence}
+Options:
+{options}
+
+Answer with the label of the best option only.

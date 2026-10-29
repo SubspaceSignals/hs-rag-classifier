@@ -1,0 +1,60 @@
+{
+  "base_config": {
+    "path": "configs/a1_pipeline.json",
+    "sha256": "12c45eca2a504680129ff25a91049289f8d054a84270c658f3400753f2fd9798"
+  },
+  "scoring": {
+    "endpoint": "/v1/chat/completions",
+    "max_tokens": 1,
+    "logprobs": true,
+    "grammar": null,
+    "label_match": "exact token string of the bare label",
+    "floor": "lowest returned log-probability for labels absent from the list",
+    "probabilities": "before sampling (llama-server post_sampling_probs false)"
+  },
+  "top_logprobs": 1000,
+  "stage2_top_hs6": 2,
+  "temperature": {
+    "mode": "per_stage",
+    "stage1": 1.3682,
+    "stage2": 1.5238,
+    "fitted_on": "rulings val run 2670780f5ce641f1b95c4f471aceb343",
+    "val_nll": {
+      "per_stage": 1032.615,
+      "shared": 1033.798,
+      "t1": 1111.156
+    }
+  },
+  "rationale": {
+    "max_tokens": 150,
+    "quote_chars": 160,
+    "explanation_chars": 360,
+    "explanation_words": 60
+  },
+  "prompts": {
+    "a2_stage1_system": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/a2_stage1_system.txt",
+      "sha256": "c5f3fd375e38b94ee8d57397a85f8361b32d5ec3e40b7566127442ae36d4f084"
+    },
+    "a2_stage1_user": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/a2_stage1_user.txt",
+      "sha256": "d70e73badf9481fb906cf0fb264978abbbc828330ab612b130ac6563221f23cb"
+    },
+    "a2_stage2_system": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/a2_stage2_system.txt",
+      "sha256": "8cad3096197d7b855050e494e0fed164c81fc1f018a3cafe3dfd71c34e68f14c"
+    },
+    "a2_stage2_user": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/a2_stage2_user.txt",
+      "sha256": "1b40e1b94b88dffc43c9a645e84e595c90f64cebc6dd9c08005d852266b89a06"
+    },
+    "a2_rationale_system": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/a2_rationale_system.txt",
+      "sha256": "076e8793c14547abd90fa0615b7f4772ccf71860d3772f71577772da31cc7d52"
+    },
+    "a2_rationale_user": {
+      "path": "src/hs_rag_classifier/pipeline/prompts/a2_rationale_user.txt",
+      "sha256": "48fdfa0f4402f28f0dfface0b48d89ccb93f72a3b786c95de8d41c5d4b6858ae"
+    }
+  }
+}

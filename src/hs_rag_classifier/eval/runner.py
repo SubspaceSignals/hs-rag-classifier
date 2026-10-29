@@ -117,6 +117,12 @@ def _a1(valid8: set[str]) -> Arm:
     return A1PipelineArm()
 
 
+def _a2(valid8: set[str]) -> Arm:
+    from hs_rag_classifier.arms.a2_pipeline import A2PipelineArm
+
+    return A2PipelineArm()
+
+
 ARMS = {
     "oracle": lambda valid8: OracleArm(),
     "random": lambda valid8: RandomArm(sorted(valid8)),
@@ -126,6 +132,7 @@ ARMS = {
     "b2": _b2,
     "r1": _r1,
     "a1": _a1,
+    "a2": _a2,
 }
 
 

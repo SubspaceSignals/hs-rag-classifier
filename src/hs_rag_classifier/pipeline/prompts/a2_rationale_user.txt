@@ -1,0 +1,6 @@
+<description>
+{description}
+</description>
+
+Commodity code {cn8}: {path_text}
+Subheading line: {hs6_line}
