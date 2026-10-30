@@ -20,6 +20,34 @@ All downloaded from source at run time; none are stored in this repository.
 - **CROSS rulings** (US Customs and Border Protection rulings with HTS codes), as published in [flexifyai/cross_rulings_hts_dataset_for_tariffs](https://huggingface.co/datasets/flexifyai/cross_rulings_hts_dataset_for_tariffs) with the ATLAS paper ([arXiv 2509.18400](https://arxiv.org/abs/2509.18400)): planned for 6-digit training only, never validation or test. Not used so far: the original repository was not available on 28 Oct 2026, so the B2 encoder is trained on UK rulings only.
 - **Models**: [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3) (embeddings) and [answerdotai/ModernBERT-base](https://huggingface.co/answerdotai/ModernBERT-base) (B2 encoder), each pinned to a revision in `configs/`.
 
+## Tracing
+
+Per-step latency, prompts and token counts for pipeline runs, in a local [Arize Phoenix](https://github.com/Arize-ai/phoenix) viewer. Tracing is off by default and is for dev, smoke and demo runs only: evaluation numbers are measured with it off, and a test split refuses it. It needs no account and sends nothing outside this machine.
+
+1. Install the group (name every group you use, or `uv sync` removes the others):
+
+   ```bash
+   UV_PROJECT_ENVIRONMENT="$HOME/.venvs/hs-rag-classifier" uv sync --group llm --group ml --group tracing
+   ```
+
+2. Start the viewer at <http://localhost:6006>. Traces are stored in `~/data/hs-rag-classifier/phoenix`, and Phoenix's anonymous usage telemetry is off:
+
+   ```bash
+   bash scripts/start_phoenix.sh
+   ```
+
+3. Run with `--trace`, or set `HS_TRACING=1` (`PHOENIX_COLLECTOR_ENDPOINT` overrides the default `http://localhost:6006`):
+
+   ```bash
+   python -m hs_rag_classifier.pipeline.a2_tune --trace trace-smoke --n 20    # no MLflow run
+   python -m hs_rag_classifier.eval run --arm a2 --dataset rulings --limit 20 --trace
+   python -m hs_rag_classifier.pipeline.tune --trace run --profile off --evidence on
+   ```
+
+   `eval run` and `tune run` log to MLflow as usual, tagged `tracing=on`; never report those as results.
+
+Each item is one trace in the `hs-rag-classifier` project, with a span per graph node (`profile` appears only when that toggle is on) and an LLM span with token counts under each model call. A2's scoring calls are `stage1_score_call` and `stage2_score_call <hs6>`; the rationale and A1's decisions are `ChatOpenAI`.
+
 ## Licence
 
 Code: [MIT](LICENSE).

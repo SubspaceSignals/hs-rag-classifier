@@ -105,8 +105,10 @@ class A2Pipeline(Pipeline):
         self.paths = paths
         self.a2_prompts = prompts or load_a2_prompts()
 
-    def _score(self, system: str, user: str, labels: list[str]) -> dict:
-        r = score_call(self.http, self.cfg["client"], system, user, int(self.a2["top_logprobs"]))
+    def _score(self, system: str, user: str, labels: list[str], name: str) -> dict:
+        r = score_call(
+            self.http, self.cfg["client"], system, user, int(self.a2["top_logprobs"]), name
+        )
         d = scoring.label_logprobs(r["top"], labels)
         d.update(
             token=r["token"],
@@ -126,6 +128,7 @@ class A2Pipeline(Pipeline):
             self.a2_prompts["a2_stage1_system"],
             fill(self.a2_prompts["a2_stage1_user"], vals),
             list(shown),
+            "stage1_score_call",
         )
         d["options"] = hs6s
         d["choice_code"] = hs6s[scoring.top_k_indices(d["logprobs"], 1)[0]]
@@ -154,6 +157,7 @@ class A2Pipeline(Pipeline):
             self.a2_prompts["a2_stage2_system"],
             fill(self.a2_prompts["a2_stage2_user"], vals),
             list(shown),
+            f"stage2_score_call {hs6}",
         )
         d.update(hs6=hs6, cn8s=cn8s, skipped=False, overflow=overflow, n_children=len(kids))
         return d

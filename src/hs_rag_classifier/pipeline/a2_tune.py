@@ -6,6 +6,7 @@
     python -m hs_rag_classifier.pipeline.a2_tune reverse-order --run RUN_ID [--n 100]
     python -m hs_rag_classifier.pipeline.a2_tune report --run RUN_ID --a1 RUN_ID --b1ex RUN_ID
     python -m hs_rag_classifier.pipeline.a2_tune a1-citations --run RUN_ID
+    python -m hs_rag_classifier.pipeline.a2_tune [--trace] trace-smoke [--n 20]
 
 template-check: on the first N val items, the stage-1 prompt's first generated token and its top
 5 tokens, and how many of the shown labels each top_logprobs cut-off would cover.
@@ -15,6 +16,8 @@ fit-temperature: T per stage and shared on a finished val run's saved distributi
 lower total NLL wins and is written into the config.
 reverse-order: stage 1 again on a seeded subset with the option order reversed (model run).
 report, a1-citations: from saved predictions only.
+trace-smoke: the first N val items through the A2 graph (model run), for looking at traces and
+timing them; written to a JSON file only, no MLflow run, never a result.
 Outputs go to ~/data/hs-rag-classifier/eval/.
 """
 
@@ -25,12 +28,14 @@ import json
 import random
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+from hs_rag_classifier import tracing
 from hs_rag_classifier.arms import a1_pipeline as A1
 from hs_rag_classifier.arms import a2_pipeline as A2
 from hs_rag_classifier.data.nomenclature import sha256
@@ -135,6 +140,39 @@ def template_check(n: int, top_logprobs: int = max(CUTOFFS)) -> dict:
             flush=True,
         )
     return {"n": n, "top_logprobs": top_logprobs, "rows": rows}
+
+
+# --- trace smoke (model calls) -----------------------------------------------------------
+
+
+def trace_smoke(n: int) -> dict:
+    arm = A2.A2PipelineArm()
+    rows = []
+    for it in _items()[:n]:
+        t0 = time.perf_counter()
+        p = arm.predict([it])[0]
+        rows.append(
+            {
+                "item_id": it.item_id,
+                "seconds": time.perf_counter() - t0,
+                "candidates": [c.code for c in p.candidates],
+                "scores": [c.score for c in p.candidates],
+                "confidence": p.confidence,
+                "rationale": p.rationale,
+                "tokens": [p.tokens_in, p.tokens_out],
+            }
+        )
+    seconds = [r["seconds"] for r in rows]
+    out = {
+        "traced": tracing.active(),
+        "n": len(rows),
+        "mean_s": float(np.mean(seconds)),
+        "p50_s": float(np.median(seconds)),
+        "rows": rows,
+    }
+    name = f"a2_trace_smoke_{'on' if out['traced'] else 'off'}.json"
+    (OUT / name).write_text(json.dumps(out, indent=2), encoding="utf-8")
+    return out
 
 
 # --- frames and rescoring ----------------------------------------------------------------
@@ -485,11 +523,14 @@ def a1_citations(run_id: str) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="a2_tune", description=__doc__.splitlines()[0])
+    ap.add_argument("--trace", action="store_true", help="send traces to Phoenix")
     sub = ap.add_subparsers(dest="cmd", required=True)
     t = sub.add_parser("template-check")
     t.add_argument("--n", type=int, default=10)
     w = sub.add_parser("write-config")
     w.add_argument("--top-logprobs", type=int, required=True)
+    s = sub.add_parser("trace-smoke")
+    s.add_argument("--n", type=int, default=20)
     for name in ("fit-temperature", "reverse-order", "report", "a1-citations"):
         p = sub.add_parser(name)
         p.add_argument("--run", required=True)
@@ -499,11 +540,14 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--a1", required=True)
             p.add_argument("--b1ex", required=True)
     a = ap.parse_args(argv)
+    tracing.enable(a.trace)
     if a.cmd == "template-check":
         out = template_check(a.n)
         (OUT / "a2_template_check_val.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
     elif a.cmd == "write-config":
         out = write_config(a.top_logprobs)
+    elif a.cmd == "trace-smoke":
+        out = {k: v for k, v in trace_smoke(a.n).items() if k != "rows"}
     elif a.cmd == "fit-temperature":
         out = fit_temperature(a.run)
     elif a.cmd == "reverse-order":

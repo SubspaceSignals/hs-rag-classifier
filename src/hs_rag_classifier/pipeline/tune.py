@@ -39,6 +39,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from hs_rag_classifier import tracing
 from hs_rag_classifier.arms import a1_pipeline as A
 from hs_rag_classifier.data.nomenclature import sha256
 from hs_rag_classifier.eval import metrics as M
@@ -235,6 +236,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pipeline.tune", description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", default=A.DEFAULTS["client"]["base_url"])
+    parser.add_argument("--trace", action="store_true", help="send traces to Phoenix")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("server").set_defaults(func=cmd_server)
     cm = sub.add_parser("choose-m")
@@ -261,6 +263,7 @@ def main(argv: list[str] | None = None) -> int:
     cp.add_argument("--depth", type=int, default=8)
     cp.set_defaults(func=cmd_compare)
     args = parser.parse_args(argv)
+    tracing.enable(args.trace)
     return args.func(args)
 
 

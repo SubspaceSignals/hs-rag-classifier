@@ -39,6 +39,7 @@ from typing import Any
 
 import pandas as pd
 
+from hs_rag_classifier import tracing
 from hs_rag_classifier.data.rulings import NOMENCLATURE_VERSION
 from hs_rag_classifier.eval import metrics as M
 from hs_rag_classifier.eval.arms import Arm, OracleArm, Prediction, RandomArm, config_hash
@@ -151,6 +152,8 @@ def check_test_guard(arm: Arm, evalset: EvalSet, git: dict, limit: int | None) -
         raise GuardError("--limit is not allowed on a test split")
     if git["dirty"]:
         raise GuardError("the git tree is dirty; commit or stash before a test-split run")
+    if tracing.requested():
+        raise GuardError(tracing.TEST_REFUSED)
 
 
 def predict_all(
@@ -334,6 +337,7 @@ def run_eval(
                     "ablation": evalset.ablation,
                     "sanity_arm": str(bool(getattr(arm, "sanity", False))).lower(),
                     "eval_depth": str(M.eval_depth(max_depth)),
+                    **({"tracing": "on"} if tracing.active() else {}),
                     **(tags or {}),
                 }
             )

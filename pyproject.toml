@@ -27,6 +27,19 @@ llm = [
     "langchain-openai>=1.7.3",
     "langgraph>=1.2.18",
 ]
+# Opt-in tracing to a local Phoenix viewer (src/hs_rag_classifier/tracing.py). Exact pins: Phoenix
+# 14.6.0 is the newest release that moves no locked package. 14.7 and later pull in
+# pydantic-ai-slim[google], whose google-genai caps tenacity below 9.2; 20.21.1 and later (and
+# 13.22 to 14.3) also need graphql-core 3.3, which MLflow's graphene 3 refuses. The exporters are
+# held at 1.45.1 so MLflow's opentelemetry-sdk stays put.
+tracing = [
+    "arize-phoenix==14.6.0",
+    "arize-phoenix-otel==0.17.2",
+    "openinference-instrumentation-langchain==0.1.81",
+    "opentelemetry-exporter-otlp==1.45.1",
+    "opentelemetry-exporter-otlp-proto-grpc==1.45.1",
+    "opentelemetry-exporter-otlp-proto-http==1.45.1",
+]
 # GPU embedding stack (B1, B1-ex): torch from the CUDA 12.8 index for the RTX 5070 Ti (sm_120).
 # Kept out of the base dependencies; the base package imports without it.
 ml = [

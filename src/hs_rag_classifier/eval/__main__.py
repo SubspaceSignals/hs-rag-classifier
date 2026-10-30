@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from hs_rag_classifier import tracing
 from hs_rag_classifier.eval import runner as R
 from hs_rag_classifier.eval.items import DATA_ROOT, DATASETS, load
 from hs_rag_classifier.eval.metrics import HEADLINE_REVIEW_RATE
@@ -13,6 +14,10 @@ from hs_rag_classifier.eval.metrics import HEADLINE_REVIEW_RATE
 
 def cmd_run(args: argparse.Namespace) -> int:
     split = args.split or "val"
+    if split == "test" and tracing.requested(args.trace):
+        print(f"Refused: {tracing.TEST_REFUSED}", file=sys.stderr)
+        return 2
+    tracing.enable(args.trace)
     try:
         evalset = load(args.dataset, split, args.with_keywords, root=args.root)
     except ValueError as exc:
@@ -63,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         "--progress", type=int, default=0, metavar="N", help="print progress every N predict calls"
     )
     run.add_argument("--root", type=Path, default=DATA_ROOT, help="data directory")
+    run.add_argument("--trace", action="store_true", help="send traces to Phoenix (not on test)")
     run.set_defaults(func=cmd_run)
     tr = sub.add_parser("test-runs", help="list logged test-set runs and the count per arm")
     tr.add_argument("--log", type=Path, default=R.TEST_LOG)
