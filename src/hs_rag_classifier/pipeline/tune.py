@@ -60,8 +60,9 @@ SERVER = {
     "quantisation": "UD-Q4_K_XL",
     # --cache-ram 0: the default 8 GiB prompt cache in system RAM grew about 250 MB an item
     # and got llama-server OOM-killed on this 14 GiB machine (28 Oct 2026)
+    # -np 1: with llm.CACHE_PROMPT False, gives bit-identical runs (30 Oct 2026)
     "command": "~/llama.cpp/build/bin/llama-server -hf unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL "
-    "-ngl 99 -c 16384 --port 8080 --jinja --cache-ram 0",
+    "-ngl 99 -c 16384 --port 8080 --jinja --cache-ram 0 -np 1",
     "cache_ram_mib": 0,
     "n_ctx": 16384,
 }

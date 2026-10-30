@@ -1,7 +1,8 @@
 """The decider client: llama-server's OpenAI-compatible endpoint through LangChain's ChatOpenAI.
 
-Every call: temperature 0, a fixed seed, thinking disabled through the chat template
-(chat_template_kwargs.enable_thinking = false), and a JSON schema as response_format, so
+Every call: temperature 0, a fixed seed, prompt reuse off (CACHE_PROMPT), thinking disabled
+through the chat template (chat_template_kwargs.enable_thinking = false), and a JSON schema as
+response_format, so
 llama-server constrains decoding to the schema and every reply parses. ServerInfo reads the
 server's own tokenizer (/tokenize), chat template (/apply-template) and build (/props).
 """
@@ -17,6 +18,9 @@ import httpx
 from hs_rag_classifier import tracing
 
 BASE_URL = "http://localhost:8080"
+# Sent as cache_prompt on every generation request. A2's output depended on llama-server's slot
+# and prompt-cache state; False with a -np 1 server gives bit-identical runs (neither does alone).
+CACHE_PROMPT = False
 
 
 def make_chat(client: dict[str, Any], base_url: str = BASE_URL):
@@ -30,7 +34,10 @@ def make_chat(client: dict[str, Any], base_url: str = BASE_URL):
         seed=client["seed"],
         timeout=client.get("timeout_s", 120),
         max_retries=client.get("max_retries", 2),
-        extra_body={"chat_template_kwargs": {"enable_thinking": client["enable_thinking"]}},
+        extra_body={
+            "cache_prompt": CACHE_PROMPT,
+            "chat_template_kwargs": {"enable_thinking": client["enable_thinking"]},
+        },
     )
 
 
@@ -125,6 +132,7 @@ def score_call(http: httpx.Client, client: dict[str, Any], system: str, user: st
         "max_tokens": 1,
         "temperature": client["temperature"],
         "seed": client["seed"],
+        "cache_prompt": CACHE_PROMPT,
         "logprobs": True,
         "top_logprobs": top_logprobs,
         "chat_template_kwargs": {"enable_thinking": client["enable_thinking"]},
