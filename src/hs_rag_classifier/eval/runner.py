@@ -12,7 +12,8 @@ Top-1 above it is reported as n/a; recall, ECE, coverage and the headline are co
 eval depth min(8, max_depth), and the run is tagged eval_depth.
 
 Test guard: a test-split run refuses a dirty git tree (untracked files included), --limit,
-and sanity arms. Every test run is appended to ~/data/hs-rag-classifier/eval/test_runs.jsonl
+sanity arms, tracing and the multi-slot override (pipeline/llm.py). An arm's run_tags (the
+llama-server arms: server_slots, cache_prompt) are added to the run's tags. Every test run is appended to ~/data/hs-rag-classifier/eval/test_runs.jsonl
 as soon as its MLflow run exists, so a run that fails part-way is still counted.
 
 Resumable runs: predictions are appended to ~/data/hs-rag-classifier/eval/partial/<run_id>.jsonl
@@ -45,6 +46,7 @@ from hs_rag_classifier.eval import metrics as M
 from hs_rag_classifier.eval.arms import Arm, OracleArm, Prediction, RandomArm, config_hash
 from hs_rag_classifier.eval.items import DATA_ROOT, REPO_ROOT, EvalSet
 from hs_rag_classifier.eval.plots import coverage_plot, reliability_plot
+from hs_rag_classifier.pipeline import llm
 
 os.environ.setdefault("MLFLOW_DISABLE_AGENT_HINT", "1")
 import mlflow
@@ -154,6 +156,8 @@ def check_test_guard(arm: Arm, evalset: EvalSet, git: dict, limit: int | None) -
         raise GuardError("the git tree is dirty; commit or stash before a test-split run")
     if tracing.requested():
         raise GuardError(tracing.TEST_REFUSED)
+    if llm.multislot_requested():
+        raise GuardError(llm.MULTISLOT_TEST_REFUSED)
 
 
 def predict_all(
@@ -341,6 +345,9 @@ def run_eval(
                     **(tags or {}),
                 }
             )
+        # llama-server arms: server_slots, cache_prompt (llm.check_server_slots), on resume too
+        if getattr(arm, "run_tags", None):
+            mlflow.set_tags(arm.run_tags)
         finished = {p.item_id for p in done}
         todo = [i for i in items if i.item_id not in finished]
         new, new_lat, _ = predict_all(arm, todo, sink, progress)

@@ -10,6 +10,7 @@ from hs_rag_classifier import tracing
 from hs_rag_classifier.eval import runner as R
 from hs_rag_classifier.eval.items import DATA_ROOT, DATASETS, load
 from hs_rag_classifier.eval.metrics import HEADLINE_REVIEW_RATE
+from hs_rag_classifier.pipeline import llm
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -17,14 +18,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     if split == "test" and tracing.requested(args.trace):
         print(f"Refused: {tracing.TEST_REFUSED}", file=sys.stderr)
         return 2
+    if split == "test" and llm.multislot_requested(args.allow_multislot):
+        print(f"Refused: {llm.MULTISLOT_TEST_REFUSED}", file=sys.stderr)
+        return 2
     tracing.enable(args.trace)
+    llm.allow_multislot(args.allow_multislot)
     try:
         evalset = load(args.dataset, split, args.with_keywords, root=args.root)
     except ValueError as exc:
         print(exc, file=sys.stderr)
         return 2
     valid8, valid10 = R.valid_codes(args.root)
-    arm = R.make_arm(args.arm, valid8)
+    try:
+        arm = R.make_arm(args.arm, valid8)
+    except llm.ServerSlotsError as exc:
+        print(f"Refused: {exc}", file=sys.stderr)
+        return 2
     try:
         result = R.run_eval(arm, evalset, valid8, valid10, limit=args.limit,
                             review_rate=args.review_rate, resume=args.resume,
@@ -69,6 +78,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     run.add_argument("--root", type=Path, default=DATA_ROOT, help="data directory")
     run.add_argument("--trace", action="store_true", help="send traces to Phoenix (not on test)")
+    run.add_argument("--allow-multislot", action="store_true",
+                     help="dev only: continue on a llama-server without exactly one slot "
+                     "(not on test)")  # fmt: skip
     run.set_defaults(func=cmd_run)
     tr = sub.add_parser("test-runs", help="list logged test-set runs and the count per arm")
     tr.add_argument("--log", type=Path, default=R.TEST_LOG)

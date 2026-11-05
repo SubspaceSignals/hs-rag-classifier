@@ -91,6 +91,7 @@ class Pipeline:
         self.chat, self.retriever, self.tariff = chat, retriever, tariff
         self.validator, self.evidence_index = validator, evidence_index
         self.prompts = prompts or load_prompts()
+        self.server_tags: dict[str, str] = {}  # from llm.check_server_slots (build_pipeline)
         self.labels: list[str] = list(config["labels"])
         self.m = int(config["m"])
         if self.m > len(self.labels):

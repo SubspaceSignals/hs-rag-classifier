@@ -123,6 +123,7 @@ class A2PipelineArm:
         self.config = dict(config or load_config())
         self.pipeline = pipeline or build_pipeline(self.config, root)
         self.graph = self.pipeline.build()
+        self.run_tags = dict(self.pipeline.server_tags)  # MLflow tags (eval/runner.py)
 
     def predict(self, items: Sequence[EvalItem]) -> list[Prediction]:
         out = []
@@ -142,11 +143,11 @@ def build_pipeline(
     from hs_rag_classifier.pipeline.graph_a2 import A2Pipeline
     from hs_rag_classifier.pipeline.options import load_cn8_paths
 
-    a1 = A1.build_pipeline(config, root, retriever, tariff, api)
+    a1 = A1.build_pipeline(config, root, retriever, tariff, api)  # runs the one-slot guard
     http = httpx.Client(
         base_url=config["client"]["base_url"], timeout=config["client"].get("timeout_s", 120)
     )
-    return A2Pipeline(
+    pipe = A2Pipeline(
         config,
         a1.chat,
         a1.retriever,
@@ -156,6 +157,8 @@ def build_pipeline(
         load_cn8_paths(root),
         a1.evidence_index,
     )
+    pipe.server_tags = a1.server_tags
+    return pipe
 
 
 def rescore(details: dict, t1: float, t2: float) -> tuple[list[str], float]:

@@ -28,6 +28,8 @@ All downloaded from source at run time; none are stored in this repository.
 
 Keep `-np 1` for evaluation: A2 output depended on llama-server slot and prompt-cache state, and `-np 1` plus `cache_prompt=false` (set in `pipeline/llm.py`) gives bit-identical runs. It serves one request at a time, so the Phase 4 service may use different flags and will not be bit-reproducible.
 
+Every A1 and A2 run, and the tuning scripts, stop unless llama-server reports exactly one slot (`total_slots` in `/props`). For dev runs only, `HS_ALLOW_MULTISLOT=1` or `--allow-multislot` continues with a warning and tags the MLflow run `multislot_override=true`; a test split refuses it. The `config_hash` does not capture the `cache_prompt`/`-np 1` fix, so runs before and after it share a hash; the `git_commit` and `server_slots` tags mark a reproducible run (every llama-server run is also tagged `cache_prompt`).
+
 ## Tracing
 
 Per-step latency, prompts and token counts for pipeline runs, in a local [Arize Phoenix](https://github.com/Arize-ai/phoenix) viewer. Tracing is off by default and is for dev, smoke and demo runs only: evaluation numbers are measured with it off, and a test split refuses it. It needs no account and sends nothing outside this machine.

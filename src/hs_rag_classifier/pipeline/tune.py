@@ -45,7 +45,7 @@ from hs_rag_classifier.data.nomenclature import sha256
 from hs_rag_classifier.eval import metrics as M
 from hs_rag_classifier.eval import runner as R
 from hs_rag_classifier.eval.items import DATA_ROOT, REPO_ROOT, load
-from hs_rag_classifier.pipeline import checks
+from hs_rag_classifier.pipeline import checks, llm
 from hs_rag_classifier.pipeline.llm import ServerInfo
 
 SERVER_JSON = DATA_ROOT / "eval" / "a1_server.json"
@@ -61,8 +61,7 @@ SERVER = {
     # --cache-ram 0: the default 8 GiB prompt cache in system RAM grew about 250 MB an item
     # and got llama-server OOM-killed on this 14 GiB machine (28 Oct 2026)
     # -np 1: with llm.CACHE_PROMPT False, gives bit-identical runs (30 Oct 2026)
-    "command": "~/llama.cpp/build/bin/llama-server -hf unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL "
-    "-ngl 99 -c 16384 --port 8080 --jinja --cache-ram 0 -np 1",
+    "command": llm.SERVER_COMMAND,
     "cache_ram_mib": 0,
     "n_ctx": 16384,
 }
@@ -94,7 +93,7 @@ def cmd_server(args: argparse.Namespace) -> int:
            "model_file": Path(props["model_path"]).name,
            "model_snapshot": Path(props["model_path"]).parent.name,
            "model_sha256": gguf_sha256(str(Path(props["model_path"]).resolve())),
-           "n_slots": props.get("total_slots"),
+           "n_slots": llm.slot_count(props),
            "n_ctx_slot": props["default_generation_settings"].get("n_ctx"),
            "labels": labels, "labels_rejected": rejected}  # fmt: skip
     SERVER_JSON.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +124,7 @@ def cmd_choose_m(args: argparse.Namespace) -> int:
     from hs_rag_classifier.retrieval.hybrid import HybridRetriever
     from hs_rag_classifier.retrieval.hybrid import load_config as load_hybrid
 
+    llm.check_server_slots(args.base_url)
     info = ServerInfo(args.base_url)
     labels = json.loads(SERVER_JSON.read_text(encoding="utf-8"))["labels"]
     cfg = {**A.DEFAULTS, "profile": False, "evidence": True, "m": len(labels), "labels": labels}
@@ -238,6 +238,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="pipeline.tune", description=__doc__.splitlines()[0])
     parser.add_argument("--base-url", default=A.DEFAULTS["client"]["base_url"])
     parser.add_argument("--trace", action="store_true", help="send traces to Phoenix")
+    parser.add_argument("--allow-multislot", action="store_true",
+                        help="dev only: continue on a llama-server without exactly one slot")  # fmt: skip
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("server").set_defaults(func=cmd_server)
     cm = sub.add_parser("choose-m")
@@ -265,6 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     cp.set_defaults(func=cmd_compare)
     args = parser.parse_args(argv)
     tracing.enable(args.trace)
+    llm.allow_multislot(args.allow_multislot)
     return args.func(args)
 
 

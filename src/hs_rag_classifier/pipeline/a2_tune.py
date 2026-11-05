@@ -41,7 +41,7 @@ from hs_rag_classifier.arms import a2_pipeline as A2
 from hs_rag_classifier.data.nomenclature import sha256
 from hs_rag_classifier.eval import metrics as M
 from hs_rag_classifier.eval.items import DATA_ROOT, REPO_ROOT, load
-from hs_rag_classifier.pipeline import checks, scoring
+from hs_rag_classifier.pipeline import checks, llm, scoring
 
 OUT = DATA_ROOT / "eval"
 STAGE2_TOP_HS6 = 2
@@ -524,6 +524,8 @@ def a1_citations(run_id: str) -> dict:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="a2_tune", description=__doc__.splitlines()[0])
     ap.add_argument("--trace", action="store_true", help="send traces to Phoenix")
+    ap.add_argument("--allow-multislot", action="store_true",
+                    help="dev only: continue on a llama-server without exactly one slot")  # fmt: skip
     sub = ap.add_subparsers(dest="cmd", required=True)
     t = sub.add_parser("template-check")
     t.add_argument("--n", type=int, default=10)
@@ -541,6 +543,7 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--b1ex", required=True)
     a = ap.parse_args(argv)
     tracing.enable(a.trace)
+    llm.allow_multislot(a.allow_multislot)
     if a.cmd == "template-check":
         out = template_check(a.n)
         (OUT / "a2_template_check_val.json").write_text(json.dumps(out, indent=2), encoding="utf-8")

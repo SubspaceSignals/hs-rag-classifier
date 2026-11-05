@@ -134,6 +134,7 @@ class A1PipelineArm:
         self.config = dict(config or load_config())
         self.pipeline = pipeline or build_pipeline(self.config, root)
         self.graph = self.pipeline.build()
+        self.run_tags = dict(self.pipeline.server_tags)  # MLflow tags (eval/runner.py)
 
     def predict(self, items: Sequence[EvalItem]) -> list[Prediction]:
         out = []
@@ -145,20 +146,26 @@ class A1PipelineArm:
 
 def build_pipeline(config: dict[str, Any], root: Path = DATA_ROOT, retriever=None, tariff=None,
                    api: bool = True):  # fmt: skip
-    """The real parts: llama-server chat client, hybrid retriever, tariff texts, validator."""
+    """The real parts: llama-server chat client, hybrid retriever, tariff texts, validator.
+
+    Every llama-server run (A1, A2 through its own build_pipeline, the tuning scripts) starts
+    here, so the one-slot guard runs first, before anything is loaded."""
+    from hs_rag_classifier.pipeline import llm
     from hs_rag_classifier.pipeline.graph import Pipeline
-    from hs_rag_classifier.pipeline.llm import make_chat
     from hs_rag_classifier.pipeline.options import load_tariff
     from hs_rag_classifier.pipeline.validate import EvidenceIndex, Validator, make_api
     from hs_rag_classifier.retrieval.hybrid import HybridRetriever
     from hs_rag_classifier.retrieval.hybrid import load_config as load_hybrid
 
+    server_tags = llm.check_server_slots(config["client"]["base_url"])
     tariff = tariff or load_tariff(root)
     retriever = retriever or HybridRetriever(load_hybrid(), root)
-    chat = make_chat(config["client"], config["client"]["base_url"])
+    chat = llm.make_chat(config["client"], config["client"]["base_url"])
     validator = Validator(tariff, make_api() if api else None)
     evidence = EvidenceIndex(root) if config["evidence"] else None
-    return Pipeline(config, chat, retriever, tariff, validator, evidence)
+    pipe = Pipeline(config, chat, retriever, tariff, validator, evidence)
+    pipe.server_tags = server_tags
+    return pipe
 
 
 def diagnostics(frame) -> dict[str, Any]:
