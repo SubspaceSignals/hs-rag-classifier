@@ -3,7 +3,8 @@
     python -m hs_rag_classifier.pipeline.a2_tune template-check [--n 10]
     python -m hs_rag_classifier.pipeline.a2_tune write-config --top-logprobs N
     python -m hs_rag_classifier.pipeline.a2_tune fit-temperature --run RUN_ID
-    python -m hs_rag_classifier.pipeline.a2_tune reverse-order --run RUN_ID [--n 100]
+    python -m hs_rag_classifier.pipeline.a2_tune reverse-order --run RUN_ID [--n 100] [--out PATH]
+        [--save-probs] [--order forward|reversed] [--items-from PATH]
     python -m hs_rag_classifier.pipeline.a2_tune report --run RUN_ID --a1 RUN_ID --b1ex RUN_ID
     python -m hs_rag_classifier.pipeline.a2_tune a1-citations --run RUN_ID
     python -m hs_rag_classifier.pipeline.a2_tune [--trace] trace-smoke [--n 20]
@@ -15,6 +16,8 @@ rationale limits, a1_pipeline.json and prompt SHA-256).
 fit-temperature: T per stage and shared on a finished val run's saved distributions; the
 lower total NLL wins and is written into the config.
 reverse-order: stage 1 again on a seeded subset with the option order reversed (model run).
+With no flags it writes eval/a2_reverse_order_val.json as before; see reverse_order for --out,
+--save-probs, --order and --items-from.
 report, a1-citations: from saved predictions only.
 trace-smoke: the first N val items through the A2 graph (model run), for looking at traces and
 timing them; written to a JSON file only, no MLflow run, never a result.
@@ -302,8 +305,45 @@ def position_bias(frame: pd.DataFrame, bins=((0, 1), (1, 3), (3, 10), (10, 20), 
     return out
 
 
-def reverse_order(run_id: str, n: int = 100, seed: int = REVERSE_SEED) -> dict:
-    """Stage 1 again with the option order reversed on a seeded subset; top-1 HS6 changes."""
+def order_options(options: list[str], order: str) -> list[str]:
+    """The stage-1 options as shown: the saved (fused) order, or reversed."""
+    if order not in ("forward", "reversed"):
+        raise ValueError(f"order must be forward or reversed, not {order!r}")
+    return list(options) if order == "forward" else list(reversed(options))
+
+
+def probs_by_code(codes: list[str], logprobs: list[float]) -> dict[str, Any]:
+    """Renormalised (T = 1) probability of every option and its position, keyed by code."""
+    p = scoring.renormalise(logprobs)
+    return {
+        "probs": {c: float(x) for c, x in zip(codes, p, strict=True)},
+        "positions": {c: i for i, c in enumerate(codes)},
+    }
+
+
+def items_from_file(path: Path) -> list[str]:
+    """Item ids from an earlier reverse-order output, in its order."""
+    return [r["item_id"] for r in json.loads(path.read_text(encoding="utf-8"))["rows"]]
+
+
+def reverse_order(
+    run_id: str,
+    n: int = 100,
+    seed: int = REVERSE_SEED,
+    out_path: Path | None = None,
+    save_probs: bool = False,
+    order: str = "reversed",
+    items_from: Path | None = None,
+) -> dict:
+    """Stage 1 again with the option order reversed on a seeded subset; top-1 HS6 changes.
+
+    The run supplies each item's stage-1 options and evidence, and the choice compared with.
+    out_path: where to write (default eval/a2_reverse_order_val.json). order: "forward" runs the
+    same code with the options as saved. items_from: an earlier output whose item ids are used
+    instead of the seeded sample. save_probs: also retrieve (for stage 2's option order), score
+    stage 2 for the top HS6 of this order, combine and validate (no rationale), and save for
+    each stage every option's renormalised probability and position, keyed by code.
+    """
     from hs_rag_classifier.eval.runner import load_run_frame
     from hs_rag_classifier.pipeline.graph import fill
     from hs_rag_classifier.pipeline.llm import score_call
@@ -313,13 +353,20 @@ def reverse_order(run_id: str, n: int = 100, seed: int = REVERSE_SEED) -> dict:
     pipe = A2.build_pipeline(config, api=False)
     by_id = {r.item_id: r for r in frame.itertuples(index=False)}
     items = {it.item_id: it for it in _items()}
-    ids = sorted(random.Random(seed).sample(sorted(by_id), n))
+    if items_from is not None:
+        ids = items_from_file(items_from)
+        missing = [i for i in ids if i not in by_id]
+        if missing:
+            raise ValueError(f"{len(missing)} ids from {items_from} are not in run {run_id}")
+        n = len(ids)
+    else:
+        ids = sorted(random.Random(seed).sample(sorted(by_id), n))
     changed, rows = 0, []
     for k, item_id in enumerate(ids):
         d = json.loads(by_id[item_id].details)
         s: dict[str, Any] = {"raw": items[item_id].text, "evidence": d["evidence"]}
         s.update(pipe.input_check(s))
-        hs6s = list(reversed(d["stage1"]["options"]))
+        hs6s = order_options(d["stage1"]["options"], order)
         shown = {lab: pipe.tariff.hs6_line(lab, h) for lab, h in zip(pipe.labels, hs6s)}
         vals = {**pipe._blocks(s, True), "options": "\n".join(shown.values())}
         r = score_call(
@@ -333,20 +380,48 @@ def reverse_order(run_id: str, n: int = 100, seed: int = REVERSE_SEED) -> dict:
         top = hs6s[scoring.top_k_indices(lp, 1)[0]]
         orig = d["stage1"]["choice_code"]
         changed += top != orig
-        rows.append(
-            {
-                "item_id": item_id,
-                "original": orig,
-                "reversed": top,
-                "original_pos": d["stage1"]["options"].index(orig),
-                "reversed_pos_in_original": d["stage1"]["options"].index(top),
-            }
-        )
+        row = {
+            "item_id": item_id,
+            "original": orig,
+            "reversed": top,
+            "original_pos": d["stage1"]["options"].index(orig),
+            "reversed_pos_in_original": d["stage1"]["options"].index(top),
+        }
+        if save_probs:
+            row.update(_later_stages(pipe, s, hs6s, lp, d["stage1"]["options"]))
+        rows.append(row)
         if (k + 1) % 25 == 0:
             print(f"  {k + 1} of {n}, changed so far {changed}", flush=True)
     out = {"run_id": run_id, "n": n, "seed": seed, "top1_hs6_changed": changed / n, "rows": rows}
-    (OUT / "a2_reverse_order_val.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
+    if save_probs or order != "reversed" or items_from is not None or out_path is not None:
+        out.update(order=order, save_probs=save_probs,
+                   items_from=None if items_from is None else str(items_from),
+                   server_tags=pipe.server_tags)  # fmt: skip
+    path = out_path or OUT / "a2_reverse_order_val.json"
+    path.write_text(json.dumps(out, indent=2), encoding="utf-8")
     return out
+
+
+def _later_stages(pipe, s: dict[str, Any], hs6s: list[str], lp: list[float],
+                  saved: list[str]) -> dict[str, Any]:  # fmt: skip
+    """Stage 2, combine and validate after a stage 1 shown in hs6s' order (see reverse_order).
+    options_match_retrieval: retrieval run now gives the saved stage-1 options, in order."""
+    s.update(pipe.retrieve(s))
+    s["stage1"] = {"options": hs6s, "logprobs": lp}
+    s2 = pipe.stage2_score(s)
+    s["stage2_scored"] = s2["stage2_scored"]
+    s.update(pipe.combine(s))
+    v = pipe.validate(s)
+    final = next(p for p in s["ranked"] if p["cn8"] == v["cn8"])
+    return {
+        "stage1": {"choice": hs6s[scoring.top_k_indices(lp, 1)[0]],
+                   "options_match_retrieval": pipe.stage1_options(s["fused"]) == list(saved),
+                   **probs_by_code(hs6s, lp)},
+        "stage2": [{"hs6": x["hs6"], "skipped": x["skipped"], **probs_by_code(x["cn8s"], x["logprobs"])}
+                   for x in s2["stage2_scored"]],
+        "final": {"hs6": final["hs6"], "cn8": v["cn8"], "joint": final["joint"],
+                  "fallback": v["validation"]["fallback"]},
+    }  # fmt: skip
 
 
 # --- agreement signal --------------------------------------------------------------------
@@ -538,6 +613,13 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--run", required=True)
         if name == "reverse-order":
             p.add_argument("--n", type=int, default=100)
+            p.add_argument("--out", type=Path, help="default eval/a2_reverse_order_val.json")
+            p.add_argument("--save-probs", action="store_true",
+                           help="also stage 2, combine, validate; every option's probability "
+                           "and position per stage, keyed by code")  # fmt: skip
+            p.add_argument("--order", choices=("forward", "reversed"), default="reversed")
+            p.add_argument("--items-from", type=Path,
+                           help="take item ids from an earlier reverse-order output")  # fmt: skip
         if name == "report":
             p.add_argument("--a1", required=True)
             p.add_argument("--b1ex", required=True)
@@ -554,7 +636,8 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "fit-temperature":
         out = fit_temperature(a.run)
     elif a.cmd == "reverse-order":
-        out = reverse_order(a.run, a.n)
+        out = reverse_order(a.run, a.n, out_path=a.out, save_probs=a.save_probs, order=a.order,
+                            items_from=a.items_from)  # fmt: skip
         out = {k: v for k, v in out.items() if k != "rows"}
     elif a.cmd == "report":
         out = report(a.run, a.a1, a.b1ex)
