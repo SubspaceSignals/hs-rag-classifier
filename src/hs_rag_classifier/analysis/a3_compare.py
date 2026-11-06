@@ -9,7 +9,9 @@ Inputs are saved prediction files, any of: an A2 pass JSON (eval/repro_val750/pa
 {"rows": [{"item_id", "candidates", "scores", "confidence", "details"}]}), a harness
 predictions.parquet, or a harness partial predictions JSONL (eval/partial/RUN_ID.jsonl). Each is
 scored against the dataset split's labels (eval.metrics.score, 8 digits) and must cover exactly
-its items. The A3 file's details hold B1-ex's cn8 agreement (arms.a3_pipeline).
+its items. The A3 file's details hold B1-ex's cn8 agreement (arms.a3_pipeline). A parquet without
+a details column (B1-ex runs saved before predictions carried one) loads with details None for
+every row; reference does not need details, and compare refuses an A3 file without them.
 
 compare: paired cluster bootstrap (eval.metrics.bootstrap_samples: the split's clusters, 1,000
 resamples, the harness seed), A3 minus A2, for cn8 top-1, HS6 top-1, top-3 recall at 8; accuracy
@@ -57,6 +59,8 @@ def load_predictions(path: Path) -> list[Prediction]:
         return read_partial(path)[0]
     if path.suffix == ".parquet":
         f = pd.read_parquet(path)
+        if "details" not in f.columns:  # e.g. B1-ex runs saved before predictions had details
+            f = f.assign(details=None)
         return [
             Prediction(
                 item_id=r.item_id,
@@ -94,8 +98,17 @@ def scored(preds: list[Prediction], items, valid8: set[str], valid10: set[str]) 
     return f
 
 
-def a3_agreement(preds: list[Prediction], ids: list[str]) -> np.ndarray:
+def a3_agreement(
+    preds: list[Prediction], ids: list[str], source: str = "the A3 file"
+) -> np.ndarray:
     by_id = {p.item_id: p for p in preds}
+    missing = [i for i in ids if not isinstance((by_id[i].details or {}).get("a3"), dict)
+               or "agree_cn8" not in by_id[i].details["a3"]]  # fmt: skip
+    if missing:
+        raise ValueError(
+            f"{source} has no A3 details (details['a3']['agree_cn8']) for {len(missing)} of "
+            f"{len(ids)} items, e.g. item {missing[0]}; compare needs predictions saved by arm a3"
+        )
     return np.array([bool(by_id[i].details["a3"]["agree_cn8"]) for i in ids])
 
 
@@ -220,7 +233,7 @@ def run_compare(a3: Path, a2: Path, items, dataset: str, split: str, cross_serve
     valid8, valid10 = valid or R.valid_codes()
     p3, p2 = load_predictions(a3), load_predictions(a2)
     f3, f2 = scored(p3, items, valid8, valid10), scored(p2, items, valid8, valid10)
-    result = compare(f3, f2, a3_agreement(p3, list(f3["item_id"])), n_resamples)
+    result = compare(f3, f2, a3_agreement(p3, list(f3["item_id"]), str(a3)), n_resamples)
     result.update(cross_server=bool(cross_server), dataset=dataset, split=split,
                   inputs={"a3": {"path": str(a3), "sha256": sha256_file(a3)},
                           "a2": {"path": str(a2), "sha256": sha256_file(a2)}})  # fmt: skip

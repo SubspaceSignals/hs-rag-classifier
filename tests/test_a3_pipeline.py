@@ -284,3 +284,61 @@ def test_comparison_refuses_mismatched_items(tmp_path):
     with pytest.raises(ValueError):
         C.run_compare(a3, a2, cmp_items()[:5], "rulings", "val", False,
                       mlflow_dir=tmp_path / "mlflow", n_resamples=10, valid=(CV8, set()))  # fmt: skip
+
+
+def _old_parquet_loader(path):
+    """load_predictions' parquet branch as it was before details became optional (68c40a4)."""
+    f = pd.read_parquet(path)
+    return [
+        Prediction(item_id=r.item_id,
+                   candidates=[Candidate(code=c, score=float(s))
+                               for c, s in zip(r.candidates, r.scores, strict=True)],
+                   confidence=None if pd.isna(r.confidence) else float(r.confidence),
+                   abstain=bool(r.abstain),
+                   details=json.loads(r.details) if isinstance(r.details, str) else None)
+        for r in f.itertuples(index=False)
+    ]  # fmt: skip
+
+
+def _scored_parquet(tmp_path, details: bool):
+    a3, _ = write_inputs(tmp_path)
+    f = M.score(cmp_items(), C.load_predictions(a3), CV8, set(), max_depth=8)
+    if details:
+        f["details"] = [json.dumps({"a3": {"agree_cn8": i % 2 == 0}}) for i in range(len(f))]
+        f.loc[1, "details"] = None  # a row without details stays None
+    else:
+        f = f.drop(columns=[c for c in ("details",) if c in f.columns])
+    p = tmp_path / ("with.parquet" if details else "without.parquet")
+    f.to_parquet(p, index=False)
+    return p
+
+
+def test_parquet_without_details_loads_with_details_none(tmp_path):
+    p = _scored_parquet(tmp_path, details=False)
+    assert "details" not in pd.read_parquet(p).columns
+    preds = C.load_predictions(p)
+    assert len(preds) == 6 and all(x.details is None for x in preds)
+    assert [x.candidates[0].code for x in preds] == list(pd.read_parquet(p)["top1"])
+    # reference needs no details: a B1-ex file without the column gives its rows
+    _, a2 = write_inputs(tmp_path)
+    r = C.run_reference(a2, p, cmp_items(), "rulings", "val", mlflow_dir=tmp_path / "mlflow",
+                        valid=(CV8, set()))  # fmt: skip
+    assert r["b1ex_similarity"]["top1_8"] == pytest.approx(4 / 6)
+
+
+def test_parquet_with_details_loads_as_before(tmp_path):
+    p = _scored_parquet(tmp_path, details=True)
+    new, old = C.load_predictions(p), _old_parquet_loader(p)
+    assert [x.model_dump() for x in new] == [x.model_dump() for x in old]
+    assert new[0].details == {"a3": {"agree_cn8": True}} and new[1].details is None
+
+
+def test_compare_without_a3_details_fails_with_a_clear_message(tmp_path):
+    p = _scored_parquet(tmp_path, details=False)
+    _, a2 = write_inputs(tmp_path)
+    with pytest.raises(ValueError, match=r"has no A3 details .* 6 of 6 items, e\.g\. item 1"):
+        C.run_compare(p, a2, cmp_items(), "rulings", "val", False, mlflow_dir=tmp_path / "mlflow",
+                      n_resamples=10, valid=(CV8, set()))  # fmt: skip
+    with pytest.raises(ValueError, match="1 of 6 items, e.g. item 2"):  # one row without
+        C.a3_agreement(C.load_predictions(_scored_parquet(tmp_path, details=True)),
+                       [str(i) for i in range(1, 7)])  # fmt: skip
