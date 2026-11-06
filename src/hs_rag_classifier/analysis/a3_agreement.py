@@ -36,6 +36,14 @@ position for A2 correct; area under the risk-coverage curve (mean selective risk
 coverages 1, (n-1)/n, ..., 1/n); the review rate needed for 80% and 90% accuracy. Paired
 differences: cluster bootstrap (eval.metrics.bootstrap_samples, its seed), each resample
 re-ranks the drawn rows; policy c's out-of-fold scores stay fixed within a resample.
+
+Alternative A2 pass (optional; with none of these options nothing above changes):
+    --a2-partial PATH --t1 T1 --t2 T2 --b1ex-csv PATH --out DIR
+runs policies a and b, unchanged, on another A2 pass: a harness partial predictions JSONL
+(e.g. the order-averaged run) rescored at T1, T2 (arms.a2_pipeline rescore), aligned by item id
+to the 750 val ids, with B1-ex top-1 from an earlier per_item.csv (no B1-ex re-run). b - a by
+the same cluster bootstrap, for each review rate, AUROC and AURC; context against --a2-pass.
+--out must not be the default folder.
 """
 
 from __future__ import annotations
@@ -904,6 +912,418 @@ def near_duplicate_finding(sim_bins: list[dict], tfidf_bins: list[dict]) -> str:
     return verdict + "\n\n" + " ".join(out)
 
 
+# --- alternative A2 pass (ordering check) ------------------------------------------------
+
+ALT_POLICIES = ("a", "b")
+
+
+def alt_a2_rows(
+    rows: list[dict], t1: float, t2: float, valid8: set[str], valid10: set[str], items
+) -> pd.DataFrame:
+    """An A2 pass saved by the harness (partial JSONL rows), rescored at (t1, t2), as a scored
+    frame with the columns a2_rows gives. rows: [{"prediction": {...}}]; aligned by item id."""
+    from hs_rag_classifier.arms import a2_pipeline as A2
+    from hs_rag_classifier.eval.arms import Candidate, Prediction
+    from hs_rag_classifier.pipeline import scoring
+
+    by_id = {r["prediction"]["item_id"]: r["prediction"] for r in rows}
+    ids = [i.item_id for i in items]
+    if len(by_id) != len(rows) or set(by_id) != set(ids):
+        raise R.GuardError(f"the A2 pass item ids do not match the {len(ids)} val ids")
+    preds, extra = [], []
+    for item_id in ids:
+        d = by_id[item_id]["details"]
+        order, conf = A2.rescore(d, t1, t2)
+        ranked = scoring.rank_pairs(
+            {"options": d["stage1"]["options"], "logprobs": d["stage1"]["logprobs"]},
+            d["stage2"],
+            t1,
+            t2,
+        )
+        joint: dict[str, float] = {}
+        for p in ranked:
+            joint.setdefault(p["cn8"], p["joint"])
+        top = next(p for p in ranked if p["cn8"] == order[0])
+        extra.append(
+            {
+                "item_id": item_id,
+                "a2_top3": [c[:8] for c in order[:3]],
+                "a2_p1": top["p1"],
+                "a2_p2": top["p2"],
+                "rescore_diff": 0.0,
+            }
+        )
+        preds.append(
+            Prediction(
+                item_id=item_id,
+                confidence=conf,
+                candidates=[Candidate(code=c, score=joint[c]) for c in order],
+            )
+        )
+    frame = M.score(items, preds, valid8, valid10, max_depth=8)
+    return frame.merge(pd.DataFrame(extra), on="item_id")
+
+
+def b1ex_from_csv(path: Path, ids: list[str]) -> tuple[pd.DataFrame, np.ndarray]:
+    """B1-ex top-1, similarity and correctness, and the TF-IDF column, from an earlier
+    per_item.csv of this analysis (no B1-ex re-run); aligned by item id."""
+    f = pd.read_csv(path, dtype={"item_id": str, "gold": str, "a2_top1": str, "b1ex_cn8": str})
+    if len(f) != len(set(f["item_id"])) or set(f["item_id"]) != set(ids):
+        raise R.GuardError(f"{path} item ids do not match the {len(ids)} val ids")
+    f = f.set_index("item_id").loc[ids]
+    b1 = pd.DataFrame(
+        {
+            "item_id": ids,
+            "top1": f["b1ex_cn8"].to_numpy(),
+            "b1ex_sim": f["b1ex_sim"].to_numpy(float),
+            "correct_8": f["b1ex_correct"].to_numpy(float),
+        }
+    )
+    return b1, f["tfidf_nearest_train"].to_numpy(float)
+
+
+def paired_b_minus_a(
+    frame: pd.DataFrame, n_resamples: int = M.BOOTSTRAP_RESAMPLES, seed: int = M.BOOTSTRAP_SEED
+) -> dict[str, Any]:
+    """b - a at each review rate, for AUROC and for AURC; each resample re-ranks its rows."""
+    cols = ["cluster_id", "correct", "confidence", "agree_cn8", "id_rank"]
+    boot = frame[cols].reset_index(drop=True)
+
+    def stat(kind: str, rate: float | None = None):
+        def fn(a: dict) -> float:
+            vals = []
+            for pol in ("b", "a"):
+                order = review_order(pol, a)
+                if kind == "auroc":
+                    vals.append(auroc(order, a["correct"]))
+                elif kind == "aurc":
+                    vals.append(aurc(order, a["correct"]))
+                else:
+                    vals.append(accuracy_at(order, a["correct"], rate))
+            return vals[0] - vals[1]
+
+        return fn
+
+    stats = {f"b-a@{r:.2f}": stat("acc", r) for r in REVIEW_RATES}
+    stats["b-a@auroc"] = stat("auroc")
+    stats["b-a@aurc"] = stat("aurc")
+    samples = M.bootstrap_samples(boot, stats, n_resamples, seed)
+    full = {c: boot[c].to_numpy() for c in cols}
+    out = {}
+    for name, fn in stats.items():
+        d = samples[name]
+        out[name] = {
+            "diff": fn(full),
+            "low": float(np.nanpercentile(d, 2.5)),
+            "high": float(np.nanpercentile(d, 97.5)),
+            "share_le_0": float((d <= 0).mean()),
+        }
+    return {"resamples": n_resamples, "seed": seed, "unit": "cluster_id",
+            "n_clusters": int(boot["cluster_id"].nunique()), "differences": out}  # fmt: skip
+
+
+def ordering_decision(pols: dict, paired: dict) -> dict[str, str]:
+    """KEEP (b) unless AURC(a) < AURC(b) and the interval for AURC(b) - AURC(a) is above 0."""
+    d = paired["differences"]["b-a@aurc"]
+    if pols["a"]["aurc"] < pols["b"]["aurc"] and d["low"] > 0:
+        return {"case": "SWITCH to (a)", "reason": "AURC(a) lower, interval for b - a above zero"}
+    return {"case": "KEEP (b)", "reason": "the SWITCH condition does not hold"}
+
+
+def moved(f_alt: pd.DataFrame, f_base: pd.DataFrame) -> dict[str, Any]:
+    """Items whose cn8 agreement with B1-ex changed between the base and the alternative pass."""
+    m = f_base[["item_id", "agree_cn8", "a2_correct"]].merge(
+        f_alt[["item_id", "agree_cn8", "a2_correct"]], on="item_id", suffixes=("_base", "_alt")
+    )
+    out = {}
+    for name, mask in (
+        ("disagree_to_agree", ~m["agree_cn8_base"] & m["agree_cn8_alt"]),
+        ("agree_to_disagree", m["agree_cn8_base"] & ~m["agree_cn8_alt"]),
+        ("agree_both", m["agree_cn8_base"] & m["agree_cn8_alt"]),
+        ("disagree_both", ~m["agree_cn8_base"] & ~m["agree_cn8_alt"]),
+    ):
+        g = m[mask]
+        out[name] = {
+            "n": len(g),
+            "base_acc": _mean(g["a2_correct_base"]),
+            "alt_acc": _mean(g["a2_correct_alt"]),
+        }
+    return out
+
+
+def plot_curves(curves: dict[str, dict], specs: dict[str, tuple], path: Path, n: int) -> None:
+    """Coverage-accuracy curves, 0 to 60% review; specs: key -> (label, color, linestyle)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import PercentFormatter
+
+    from hs_rag_classifier.eval import plots as P
+
+    fig, ax = P._axes(
+        f"Auto-accept accuracy by review policy\nrulings validation, n = {n}",
+        "Review rate",
+        "Accuracy of auto-accepted items (8 digits)",
+    )
+    stop = int(0.60 * n) + 1
+    for k, (label, color, ls) in specs.items():
+        x = np.array(curves[k]["review_rate"][:stop])
+        y = np.array(curves[k]["accuracy"][:stop])
+        ax.plot(x, y, color=color, linestyle=ls, linewidth=2, label=label)
+    ax.set_xlim(0, 0.60)
+    ax.xaxis.set_major_formatter(PercentFormatter(1.0))
+    ax.yaxis.set_major_formatter(PercentFormatter(1.0))
+    leg = ax.legend(frameon=False, fontsize=8, loc="upper left")
+    for t in leg.get_texts():
+        t.set_color(P.TEXT_PRIMARY)
+    fig.tight_layout()
+    fig.savefig(path, facecolor=P.SURFACE)
+    plt.close(fig)
+
+
+def run_alternative(
+    a2_partial: Path,
+    t1: float,
+    t2: float,
+    b1ex_csv: Path,
+    out: Path,
+    n_resamples: int = M.BOOTSTRAP_RESAMPLES,
+    split: str = "val",
+    base_pass: Path = A2_PASS,
+    earlier_metrics: Path | None = None,
+) -> dict:
+    """Policies (a) and (b) on another A2 pass (a harness partial JSONL rescored at t1, t2),
+    with B1-ex from an earlier per_item.csv; b - a paired; context against the base pass.
+    No model, no B1-ex re-run, no MLflow run. Writes report.md, metrics.json and
+    coverage_accuracy.png to out, which must not be this analysis's default folder."""
+    git = R.git_info()
+    check_split(split, git)
+    if Path(out).resolve() == OUT.resolve():
+        raise R.GuardError(f"give --out: {OUT} holds the default analysis")
+    from hs_rag_classifier.eval.items import load
+
+    evalset = load("rulings", "val")
+    items = evalset.items
+    ids = [i.item_id for i in items]
+    valid8, valid10 = R.valid_codes()
+    rows = [json.loads(x) for x in a2_partial.read_text(encoding="utf-8").splitlines() if x]
+    a2 = alt_a2_rows(rows, t1, t2, valid8, valid10, items)
+    b1, tfidf = b1ex_from_csv(b1ex_csv, ids)
+    a2 = a2.set_index("item_id").loc[ids].reset_index()
+    f = combine(a2, b1, tfidf)
+    a = arrays(f)
+    pols = {p: policy_metrics(review_order(p, a), a["correct"]) for p in ALT_POLICIES}
+    paired = paired_b_minus_a(f.assign(correct=a["correct"], confidence=a["confidence"]),
+                              n_resamples)  # fmt: skip
+
+    passed = json.loads(base_pass.read_text(encoding="utf-8"))
+    if passed.get("split") != "val" or passed.get("split_sha256") != evalset.split_sha256:
+        raise R.GuardError(f"{base_pass} is not a rulings validation pass")
+    base, base_t = a2_rows(passed, valid8, valid10, items)
+    base = base.set_index("item_id").loc[ids].reset_index()
+    fb = combine(base, b1, tfidf)
+    ab = arrays(fb)
+    base_b = policy_metrics(review_order("b", ab), ab["correct"])
+    earlier_bins = None
+    if earlier_metrics is not None and earlier_metrics.exists():
+        earlier_bins = [
+            b["bin"] for b in json.loads(earlier_metrics.read_text())["risk"]["by_b1ex_similarity"]
+        ]
+    sim_alt, sim_base = binned(f, "b1ex_sim"), binned(fb, "b1ex_sim")
+    m = {
+        "n": len(f),
+        "n_clusters": int(f["cluster_id"].nunique()),
+        "git": git,
+        "inputs": {
+            "a2_partial": {
+                "path": str(a2_partial),
+                "sha256": sha256_file(a2_partial),
+                "n": len(rows),
+            },
+            "temperatures": {"stage1": t1, "stage2": t2},
+            "b1ex_csv": {"path": str(b1ex_csv), "sha256": sha256_file(b1ex_csv)},
+            "base_pass": {
+                "path": str(base_pass),
+                "sha256": sha256_file(base_pass),
+                "temperatures": base_t,
+            },
+            "val_split": {"file": evalset.split_file, "sha256": evalset.split_sha256},
+            "ids_match": True,
+        },
+        "a2_top1_8": float(f["a2_correct"].mean()),
+        "base_top1_8": float(fb["a2_correct"].mean()),
+        "policies": {k: {kk: vv for kk, vv in v.items() if kk != "curve"} for k, v in pols.items()},
+        "base_policy_b": {k: v for k, v in base_b.items() if k != "curve"},
+        "paired": paired,
+        "decision": ordering_decision(pols, paired),
+        "context": {
+            "consistency": agreement_stats(f),
+            "base_consistency": agreement_stats(fb),
+            "by_b1ex_similarity": sim_alt,
+            "base_by_b1ex_similarity": sim_base,
+            "quintile_edges_match_earlier_report": (
+                None if earlier_bins is None else [b["bin"] for b in sim_alt] == earlier_bins
+            ),
+            "moved": moved(f, fb),
+        },
+    }
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "metrics.json").write_text(json.dumps(m, indent=2, default=str), encoding="utf-8")
+    plot_curves(
+        {"a": pols["a"]["curve"], "b": pols["b"]["curve"], "b_base": base_b["curve"]},
+        {
+            "b": ("(b) disagreement first, order-averaged A2", "#1baf7a", "-"),
+            "a": ("(a) confidence only, order-averaged A2", "#2a78d6", ":"),
+            "b_base": ("(b) disagreement first, A2 (a2_val_1)", "#eb6834", "--"),
+        },
+        out / "coverage_accuracy.png",
+        len(f),
+    )
+    (out / "report.md").write_text(alternative_report_md(m), encoding="utf-8")
+    return m
+
+
+def _ci(d: dict, scale: float = 100, dp: int = 1) -> str:
+    return (
+        f"{scale * d['diff']:+.{dp}f} ({scale * d['low']:+.{dp}f} to {scale * d['high']:+.{dp}f})"
+    )
+
+
+def alternative_report_md(m: dict) -> str:
+    pol, d, bb = m["policies"], m["paired"]["differences"], m["base_policy_b"]
+    i, c = m["inputs"], m["context"]
+    rows = []
+    for r in REVIEW_RATES:
+        k = f"{r:.2f}"
+        rows.append([f"accuracy, auto-accepted, {round(r * 100)}% review",
+                     _pct(pol["a"]["accuracy_at_review"][k]), _pct(pol["b"]["accuracy_at_review"][k]),
+                     _ci(d[f"b-a@{k}"]), _pct(bb["accuracy_at_review"][k])])  # fmt: skip
+    rows.append(["AUROC", _num(pol["a"]["auroc"]), _num(pol["b"]["auroc"]),
+                 _ci(d["b-a@auroc"], 1, 3), _num(bb["auroc"])])  # fmt: skip
+    rows.append(["AURC (lower is better)", _num(pol["a"]["aurc"]), _num(pol["b"]["aurc"]),
+                 _ci(d["b-a@aurc"], 1, 3), _num(bb["aurc"])])  # fmt: skip
+    for t in TARGETS:
+        k = f"{t:.2f}"
+        rows.append([f"review needed for {round(t * 100)}% accuracy",
+                     _pct(pol["a"]["review_rate_for"][k]), _pct(pol["b"]["review_rate_for"][k]),
+                     "not bootstrapped", _pct(bb["review_rate_for"][k])])  # fmt: skip
+    s, sb = c["consistency"], c["base_consistency"]
+    ctx = table(
+        ["", "averaged A2", "a2_val_1"],
+        [
+            ["cn8 agreement rate with B1-ex", _pct(s["agree_rate"]), _pct(sb["agree_rate"])],
+            ["A2 accuracy when they agree", _pct(s["a2_acc_agree"]), _pct(sb["a2_acc_agree"])],
+            [
+                "A2 accuracy when they disagree",
+                _pct(s["a2_acc_disagree"]),
+                _pct(sb["a2_acc_disagree"]),
+            ],
+            ["A2 top-1 accuracy at 8 digits", _pct(m["a2_top1_8"]), _pct(m["base_top1_8"])],
+        ],
+    )
+    qrows = [
+        [x["bin"], x["n"], _pct(x["agree_rate"]), _pct(y["agree_rate"]), _pct(x["a2_acc_agree"]),
+         _pct(y["a2_acc_agree"]), _pct(x["a2_acc_disagree"]), _pct(y["a2_acc_disagree"])]
+        for x, y in zip(c["by_b1ex_similarity"], c["base_by_b1ex_similarity"], strict=True)
+    ]  # fmt: skip
+    mv = c["moved"]
+    mrows = [[k.replace("_", " "), v["n"], _pct(v["base_acc"]), _pct(v["alt_acc"])]
+             for k, v in mv.items()]  # fmt: skip
+    dec = m["decision"]
+    return "\n".join(
+        [
+            "# A3 review ordering on the order-averaged A2 (rulings validation only)",
+            "",
+            (
+                f"Git commit {m['git']['commit'][:12]} (dirty: {m['git']['dirty']}). Offline: no model, "
+                "no B1-ex re-run, no MLflow run. Validation only (the harness test guard refuses a test "
+                "split)."
+            ),
+            "",
+            "## Inputs",
+            "",
+            (
+                f"- A2 pass: {i['a2_partial']['path']} (SHA-256 {i['a2_partial']['sha256']}, "
+                f"{i['a2_partial']['n']} items), rescored at T stage 1 {i['temperatures']['stage1']:.4f} "
+                f"and stage 2 {i['temperatures']['stage2']:.4f}."
+            ),
+            f"- B1-ex top-1: {i['b1ex_csv']['path']} (SHA-256 {i['b1ex_csv']['sha256']}).",
+            (
+                f"- Comparison pass: {i['base_pass']['path']} (SHA-256 {i['base_pass']['sha256']}) at "
+                f"its locked temperatures."
+            ),
+            (
+                f"- Val split: {i['val_split']['file']} (SHA-256 {i['val_split']['sha256']}); item ids "
+                f"match exactly in every input ({m['n']} items, {m['n_clusters']} clusters)."
+            ),
+            "",
+            "## Policies (a) and (b) on the averaged A2",
+            "",
+            (
+                "Policies from this module, unchanged: (a) A2 confidence, lowest first; (b) every cn8 "
+                "disagreement with B1-ex first, lowest confidence first within each group; ties by item "
+                "id. b minus a: paired cluster bootstrap, "
+                f"{m['paired']['resamples']:,} resamples, seed {m['paired']['seed']}, 95% intervals, "
+                "each resample re-ranking its rows. Accuracy differences in percentage points."
+            ),
+            "",
+            table(
+                [
+                    "",
+                    "(a) averaged",
+                    "(b) averaged",
+                    "b minus a (95% interval)",
+                    "(b) a2_val_1, reference",
+                ],
+                rows,
+            ),
+            "",
+            (
+                "coverage_accuracy.png: (a) and (b) on the averaged A2 and (b) on a2_val_1, 0 to 60% "
+                "review."
+            ),
+            "",
+            "## Decision rule (fixed in advance)",
+            "",
+            (
+                "KEEP (b) unless AURC(a) is lower than AURC(b) and the 95% paired interval for AURC(b) "
+                "minus AURC(a) lies entirely above zero, in which case SWITCH to (a)."
+            ),
+            "",
+            f"Case: **{dec['case']}** ({dec['reason']}). Nothing is changed here.",
+            "",
+            "## Context (report only)",
+            "",
+            ctx,
+            "",
+            (
+                "By B1-ex top similarity quintile (edges over all 750 items; the same as the earlier A3 "
+                f"report: {c['quintile_edges_match_earlier_report']}):"
+            ),
+            "",
+            table(
+                [
+                    "B1-ex similarity",
+                    "n",
+                    "agree, averaged",
+                    "agree, a2_val_1",
+                    "acc when agree, averaged",
+                    "acc when agree, a2_val_1",
+                    "acc when disagree, averaged",
+                    "acc when disagree, a2_val_1",
+                ],
+                qrows,
+            ),
+            "",
+            "Agreement with B1-ex, a2_val_1 then averaged, and A2 accuracy on each group:",
+            "",
+            table(["group", "n", "a2_val_1 accuracy", "averaged accuracy"], mrows),
+            "",
+        ]
+    )
+
+
 # --- main --------------------------------------------------------------------------------
 
 
@@ -1029,8 +1449,24 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--a2-pass", type=Path, default=A2_PASS)
     ap.add_argument("--out", type=Path, default=OUT)
     ap.add_argument("--resamples", type=int, default=M.BOOTSTRAP_RESAMPLES)
+    alt = ap.add_argument_group("alternative A2 pass (policies a and b only; see run_alternative)")
+    alt.add_argument("--a2-partial", type=Path,
+                     help="a harness partial predictions JSONL (eval/partial/RUN_ID.jsonl)")  # fmt: skip
+    alt.add_argument("--t1", type=float, help="stage-1 temperature for --a2-partial")
+    alt.add_argument("--t2", type=float, help="stage-2 temperature for --a2-partial")
+    alt.add_argument("--b1ex-csv", type=Path,
+                     help="B1-ex top-1 from an earlier per_item.csv of this analysis")  # fmt: skip
     a = ap.parse_args(argv)
     try:
+        if a.a2_partial is not None:
+            if a.t1 is None or a.t2 is None or a.b1ex_csv is None:
+                ap.error("--a2-partial needs --t1, --t2 and --b1ex-csv")
+            m = run_alternative(a.a2_partial, a.t1, a.t2, a.b1ex_csv, a.out, a.resamples,
+                                a.split, a.a2_pass, OUT / "metrics.json")  # fmt: skip
+            print(json.dumps({"decision": m["decision"], "out": str(a.out)}, indent=2))
+            return 0
+        if any(x is not None for x in (a.t1, a.t2, a.b1ex_csv)):
+            ap.error("--t1, --t2 and --b1ex-csv go with --a2-partial")
         m = run(a.a2_pass, a.out, a.resamples, a.split)
     except R.GuardError as exc:
         print(f"Refused: {exc}", file=sys.stderr)
