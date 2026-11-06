@@ -6,9 +6,6 @@ Guidance for Claude Code working in this repo.
 
 A local RAG classifier that suggests UK commodity codes (at least 8 digits) from free-text product descriptions, with calibrated confidence and a rationale citing the tariff text. Pipeline: profile (optional), retrieve, two-stage decide (6-digit, then 8-digit), validate against the Trade Tariff API, abstain or escalate.
 
-The full plan, decisions log and session log live in the project handoff one level up, outside this repo:
-`../Commodity Code AI Foundry Project Handoff.md`. Read it, then its decisions log and latest session log entry, before suggesting anything. It is private: never copy its contents into this repo, and never move it inside the repo.
-
 ## Hard constraints
 
 - **Zero spend.** Everything runs on the local RTX 5070 Ti (16GB VRAM). No paid services, no paid APIs (Claude API included), no Azure account.
@@ -24,7 +21,7 @@ The full plan, decisions log and session log live in the project handoff one lev
 
 - State the overall plan first, then do one step at a time; check requirements before any long task.
 - Never delete files without explicit permission; say so whenever anything is deleted.
-- Each session ends with one line in the handoff's session log: what was done, what comes next.
+- Never open, edit or revert the project handoff file (it lives outside this repo and is maintained in the planning chat). At the end of each task, put a suggested one-line session-log entry (date: what was done; Next: ...) in your final report instead.
 
 ## Environment
 
