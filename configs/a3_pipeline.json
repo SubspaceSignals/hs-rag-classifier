@@ -1,0 +1,27 @@
+{
+  "arm": "a3",
+  "display_name": "A3 Order-averaged A2 + review queue",
+  "status": "frozen",
+  "base_config": {
+    "path": "configs/a2_pipeline.json",
+    "sha256": "a8a9011ae5947370f8bc861f2a9b3c0e1a070517a02da75d5fab08b150e82dc5"
+  },
+  "b1ex_config": {
+    "path": "configs/b1ex_embed.json",
+    "sha256": "75e3cf9410741ee7c7ef45037ddf31ccd58a09fb667d5dfca26f13d956d6d10f"
+  },
+  "order_averaging": true,
+  "order_averaging_rule": "both stages: score the options in the usual and the reversed order (labels by position), average each order's T = 1 probabilities per code (arithmetic mean), then divide log(average) by the stage temperature before renormalising (pipeline/graph_a2.py, scoring.average_orders)",
+  "temperature": {
+    "mode": "per_stage",
+    "stage1": 1.1645301855885621,
+    "stage2": 1.3730046264063607,
+    "fitted_on": "rulings val run 2ef22673f54540949b6575e892eac169 (arm a2_order_avg), per-stage NLL of the true option; fitted and evaluated on the same 750 val items"
+  },
+  "review_policy": {
+    "name": "b",
+    "rule": "review first every item whose A2 top-1 cn8 differs from the B1-ex top-1 cn8, then the items where they agree; within each group lowest A2 joint confidence first; ties by item id (numeric order)",
+    "fitted_parameters": "none"
+  },
+  "rationale": "on, as in A2 (post-hoc call; never changes the choice)"
+}

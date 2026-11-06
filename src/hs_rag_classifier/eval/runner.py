@@ -16,6 +16,11 @@ sanity arms, validation-only arms (val_only), tracing and the multi-slot overrid
 llama-server arms: server_slots, cache_prompt) are added to the run's tags. Every test run is appended to ~/data/hs-rag-classifier/eval/test_runs.jsonl
 as soon as its MLflow run exists, so a run that fails part-way is still counted.
 
+Arm hook (optional): an arm with after_scoring(frame, n_resamples, seed) is called once every
+item is scored; it returns {"frame", "metrics", "flat"}: the frame with added per-item columns
+(saved in predictions.parquet), nested metrics stored under "arm_metrics" in metrics.json, and
+flat MLflow metrics logged next to the harness's. Arms without it are unchanged.
+
 Resumable runs: predictions are appended to ~/data/hs-rag-classifier/eval/partial/<run_id>.jsonl
 after each predict call (with their latency), so a run that stops part-way keeps its finished
 items. resume=<run_id> reopens that MLflow run and predicts only the items not yet in the file.
@@ -126,6 +131,12 @@ def _a2(valid8: set[str]) -> Arm:
     return A2PipelineArm()
 
 
+def _a3(valid8: set[str]) -> Arm:
+    from hs_rag_classifier.arms.a3_pipeline import A3Arm
+
+    return A3Arm()
+
+
 def _a2_order_avg(valid8: set[str]) -> Arm:
     from hs_rag_classifier.arms.a2_pipeline import A2OrderAvgArm
 
@@ -143,6 +154,7 @@ ARMS = {
     "a1": _a1,
     "a2": _a2,
     "a2_order_avg": _a2_order_avg,
+    "a3": _a3,
 }
 
 
@@ -368,7 +380,14 @@ def run_eval(
         total = float(sum(latencies))
         frame = M.score(items, preds, valid8, valid10, latencies, max_depth)
         metrics = M.compute_metrics(frame, total, review_rate, n_resamples, max_depth=max_depth)
+        hook = getattr(arm, "after_scoring", None)  # optional set-level outputs (e.g. A3)
+        extra = hook(frame, n_resamples, M.BOOTSTRAP_SEED) if hook is not None else None
+        if extra is not None:
+            frame = extra["frame"]
+            metrics["arm_metrics"] = extra["metrics"]
         mlflow.log_metrics(flat_metrics(metrics))
+        if extra is not None:
+            mlflow.log_metrics(extra["flat"])
         label = f"{arm.name}, {evalset.dataset} {evalset.split}"
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
@@ -419,6 +438,29 @@ def summary_lines(result: dict, arm: Arm, evalset: EvalSet) -> list[str]:
         (
             f"  throughput {lat['items_per_minute']:,.0f} items/min; latency p50 "
             f"{lat['latency_p50_s'] * 1000:.3f} ms, p95 {lat['latency_p95_s'] * 1000:.3f} ms"
+        ),
+    ]
+
+
+def arm_summary_lines(result: dict) -> list[str]:
+    """Extra summary lines for an arm with after_scoring (A3); none for other arms."""
+    am = result["metrics"].get("arm_metrics")
+    if not am or "headline_policy_b" not in am:
+        return []
+    ci = am["headline_policy_b_ci"]
+    sp = am["speed"]
+    return [
+        (
+            f"  A3: accuracy at 20% review under policy (b) {_fmt(am['headline_policy_b'])} "
+            f"[{_fmt(ci['low'])}, {_fmt(ci['high'])}]; agreement with B1-ex "
+            f"{_fmt(am['agree_rate'])}; AUROC (b) {_fmt(am['policies']['b']['auroc'])}, "
+            f"(a) {_fmt(am['policies']['a']['auroc'])}"
+        ),
+        (
+            f"  A3 speed: {sp['with_rationale']['items_per_minute']:.1f} items/min with the "
+            f"rationale (p95 {sp['with_rationale']['p95_s']:.2f} s), "
+            f"{sp['score_only']['items_per_minute']:.1f} score-only "
+            f"(p95 {sp['score_only']['p95_s']:.2f} s)"
         ),
     ]
 

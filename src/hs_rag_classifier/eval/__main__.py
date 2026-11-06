@@ -41,7 +41,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     except R.GuardError as exc:
         print(f"Refused: {exc}", file=sys.stderr)
         return 2
-    print("\n".join(R.summary_lines(result, arm, evalset)))
+    print("\n".join(R.summary_lines(result, arm, evalset) + R.arm_summary_lines(result)))
     print(f"  MLflow: {R.tracking_uri()} (experiment {result['experiment']})")
     return 0
 
