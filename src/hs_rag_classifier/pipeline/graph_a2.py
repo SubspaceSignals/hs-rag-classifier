@@ -20,6 +20,15 @@ rationale     one short post-hoc call (JSON schema: quote, explanation) given on
 finalise      candidates: the final cn8, then the other pairs' cn8 in joint order; confidence =
               the final pair's joint probability; the rationale, the disclaimer and the flags.
               No abstention yet.
+
+Order-averaging (config a2.order_averaging, default false; off, every node is as above):
+stage1_score and each stage-2 call are made twice, with the options in the usual order and
+reversed (labels by position), and the stage's logprobs become log of the per-code average of
+the two T = 1 distributions (scoring.average_orders). The top two HS6 for stage 2 and the
+pair ranking then follow from those, unchanged; a single-child HS6 still needs no call. The
+stage dict keeps the forward call's token, top, floored and outside_mass, sums tokens and llm_s
+over both calls, and adds "orders" (each order's codes, raw label log-probabilities, token,
+floored, outside_mass and T = 1 probabilities keyed by code) and "averaged" (keyed by code).
 """
 
 from __future__ import annotations
@@ -104,6 +113,7 @@ class A2Pipeline(Pipeline):
         self.http: httpx.Client = http
         self.paths = paths
         self.a2_prompts = prompts or load_a2_prompts()
+        self.order_averaging = bool(self.a2.get("order_averaging", False))
 
     def _score(self, system: str, user: str, labels: list[str], name: str) -> dict:
         r = score_call(
@@ -118,18 +128,47 @@ class A2Pipeline(Pipeline):
         )
         return d
 
+    def _averaged(self, codes: list[str], once: Callable[[list[str], str], dict],
+                  name: str) -> dict:  # fmt: skip
+        """Score codes in the usual order and reversed; logprobs = log of the per-code average."""
+        rev = list(reversed(codes))
+        fwd_d, rev_d = once(codes, name), once(rev, f"{name} reversed")
+        avg = scoring.average_orders(codes, fwd_d["logprobs"], rev, rev_d["logprobs"])
+        keep = ("logprobs", "floored", "outside_mass", "floor", "token", "top", "llm_s", "tokens")
+        orders = {
+            o: {"codes": c, **{k: d[k] for k in keep}, "probs": avg["probs"][o]}
+            for o, c, d in (("forward", codes, fwd_d), ("reversed", rev, rev_d))
+        }
+        d = dict(fwd_d)
+        d.update(
+            logprobs=avg["logprobs"],
+            llm_s=fwd_d["llm_s"] + rev_d["llm_s"],
+            tokens=[
+                (a or 0) + (b or 0) for a, b in zip(fwd_d["tokens"], rev_d["tokens"], strict=True)
+            ],
+            orders=orders,
+            averaged=avg["averaged"],
+        )
+        return d
+
     # --- nodes ---------------------------------------------------------------------------
 
-    def stage1_score(self, s: A2State) -> dict:
-        hs6s = self.stage1_options(s["fused"])
+    def _stage1_once(self, s: A2State, hs6s: list[str], name: str) -> dict:
         shown = {lab: self.tariff.hs6_line(lab, h) for lab, h in zip(self.labels, hs6s)}
         vals = {**self._blocks(s, self.cfg["evidence"]), "options": "\n".join(shown.values())}
-        d = self._score(
+        return self._score(
             self.a2_prompts["a2_stage1_system"],
             fill(self.a2_prompts["a2_stage1_user"], vals),
             list(shown),
-            "stage1_score_call",
+            name,
         )
+
+    def stage1_score(self, s: A2State) -> dict:
+        hs6s = self.stage1_options(s["fused"])
+        if self.order_averaging:
+            d = self._averaged(hs6s, lambda c, n: self._stage1_once(s, c, n), "stage1_score_call")
+        else:
+            d = self._stage1_once(s, hs6s, "stage1_score_call")
         d["options"] = hs6s
         d["choice_code"] = hs6s[scoring.top_k_indices(d["logprobs"], 1)[0]]
         return {"stage1": d, "hs6": d["choice_code"], "tokens": {"stage1": d["tokens"]}}
@@ -146,6 +185,15 @@ class A2Pipeline(Pipeline):
                 "n_children": 1,
             }
         cn8s, overflow = self.stage2_options(hs6, s["fused"])
+        name = f"stage2_score_call {hs6}"
+        if self.order_averaging:
+            d = self._averaged(cn8s, lambda c, n: self._stage2_once(s, hs6, c, n), name)
+        else:
+            d = self._stage2_once(s, hs6, cn8s, name)
+        d.update(hs6=hs6, cn8s=cn8s, skipped=False, overflow=overflow, n_children=len(kids))
+        return d
+
+    def _stage2_once(self, s: A2State, hs6: str, cn8s: list[str], name: str) -> dict:
         shown = {lab: self.tariff.cn8_line(lab, c) for lab, c in zip(self.labels, cn8s)}
         vals = {
             **self._blocks(s, False),
@@ -153,14 +201,12 @@ class A2Pipeline(Pipeline):
             "hs6_text": self.tariff.hs6_text[hs6],
             "options": "\n".join(shown.values()),
         }
-        d = self._score(
+        return self._score(
             self.a2_prompts["a2_stage2_system"],
             fill(self.a2_prompts["a2_stage2_user"], vals),
             list(shown),
-            f"stage2_score_call {hs6}",
+            name,
         )
-        d.update(hs6=hs6, cn8s=cn8s, skipped=False, overflow=overflow, n_children=len(kids))
-        return d
 
     def stage2_score(self, s: A2State) -> dict:
         s1 = s["stage1"]

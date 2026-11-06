@@ -1,0 +1,15 @@
+{
+  "status": "validation only, not frozen",
+  "base_config": {
+    "path": "configs/a2_pipeline.json",
+    "sha256": "a8a9011ae5947370f8bc861f2a9b3c0e1a070517a02da75d5fab08b150e82dc5"
+  },
+  "order_averaging": true,
+  "order_averaging_rule": "each stage scores its options in the usual order and reversed (labels by position); the two T = 1 distributions are mapped back to codes and averaged arithmetically per code; log of the average is the per-option score the stage temperature divides",
+  "temperature": {
+    "mode": "per_stage",
+    "stage1": 1.3682,
+    "stage2": 1.5238,
+    "status": "placeholder (A2's locked values), to be refitted on val"
+  }
+}

@@ -12,7 +12,7 @@ Top-1 above it is reported as n/a; recall, ECE, coverage and the headline are co
 eval depth min(8, max_depth), and the run is tagged eval_depth.
 
 Test guard: a test-split run refuses a dirty git tree (untracked files included), --limit,
-sanity arms, tracing and the multi-slot override (pipeline/llm.py). An arm's run_tags (the
+sanity arms, validation-only arms (val_only), tracing and the multi-slot override (pipeline/llm.py). An arm's run_tags (the
 llama-server arms: server_slots, cache_prompt) are added to the run's tags. Every test run is appended to ~/data/hs-rag-classifier/eval/test_runs.jsonl
 as soon as its MLflow run exists, so a run that fails part-way is still counted.
 
@@ -126,6 +126,12 @@ def _a2(valid8: set[str]) -> Arm:
     return A2PipelineArm()
 
 
+def _a2_order_avg(valid8: set[str]) -> Arm:
+    from hs_rag_classifier.arms.a2_pipeline import A2OrderAvgArm
+
+    return A2OrderAvgArm()
+
+
 ARMS = {
     "oracle": lambda valid8: OracleArm(),
     "random": lambda valid8: RandomArm(sorted(valid8)),
@@ -136,6 +142,7 @@ ARMS = {
     "r1": _r1,
     "a1": _a1,
     "a2": _a2,
+    "a2_order_avg": _a2_order_avg,
 }
 
 
@@ -150,6 +157,10 @@ def check_test_guard(arm: Arm, evalset: EvalSet, git: dict, limit: int | None) -
         return
     if getattr(arm, "sanity", False):
         raise GuardError(f"{arm.name} is a sanity arm; sanity arms never run on a test split")
+    if getattr(arm, "val_only", False):
+        raise GuardError(
+            f"{arm.name} is a validation-only candidate; it never runs on a test split"
+        )
     if limit is not None:
         raise GuardError("--limit is not allowed on a test split")
     if git["dirty"]:

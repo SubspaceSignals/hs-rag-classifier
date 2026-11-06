@@ -10,6 +10,11 @@ rationale; details hold per-node timings, so score-only latency is that minus th
 
 Config: configs/a2_pipeline.json. load_config refuses it when configs/a1_pipeline.json, the
 retriever config or any A1 or A2 prompt template has changed since (SHA-256).
+
+Order-averaging candidate (A3, validation only, not frozen): configs/a3_candidate_val.json pins
+configs/a2_pipeline.json by SHA-256 and sets a2.order_averaging and the stage temperatures over
+A2's; everything else is A2's. Arm a2_order_avg runs it; the harness refuses it on a test split
+(val_only).
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from hs_rag_classifier.pipeline import scoring
 from hs_rag_classifier.pipeline.graph_a2 import A2_PROMPTS
 
 CONFIG_PATH = REPO_ROOT / "configs" / "a2_pipeline.json"
+CANDIDATE_PATH = REPO_ROOT / "configs" / "a3_candidate_val.json"
 BASE_CONFIG = "configs/a1_pipeline.json"
 RANKED_KEPT = 10
 
@@ -54,6 +60,24 @@ def load_config(path: Path = CONFIG_PATH, repo: Path = REPO_ROOT) -> dict[str, A
     return {**base, "a2": a2}
 
 
+def load_candidate_config(path: Path = CANDIDATE_PATH, repo: Path = REPO_ROOT) -> dict[str, Any]:
+    """A2's config with the candidate's order_averaging and temperatures (rule in the doc)."""
+    cand = json.loads(path.read_text(encoding="utf-8"))
+    pin = cand["base_config"]
+    if sha256(repo / pin["path"]) != pin["sha256"]:
+        raise RuntimeError(f"{pin['path']} changed since {path.name} was written")
+    base = load_config(repo / pin["path"], repo)
+    a2 = {
+        **base["a2"],
+        "order_averaging": bool(cand["order_averaging"]),
+        "temperature": cand["temperature"],
+    }
+    return {**base, "a2": a2, "candidate_config": {"path": path.name, "sha256": sha256(path)}}
+
+
+ORDER_KEYS = ("orders", "averaged")  # present only with order_averaging
+
+
 def stage2_view(d: dict) -> dict:
     keys = (
         "hs6",
@@ -68,7 +92,7 @@ def stage2_view(d: dict) -> dict:
         "n_children",
         "llm_s",
     )
-    return {k: d.get(k) for k in keys}
+    return {k: d.get(k) for k in keys + tuple(k for k in ORDER_KEYS if k in d)}
 
 
 def to_prediction(item_id: str, state: dict) -> Prediction:
@@ -93,6 +117,7 @@ def to_prediction(item_id: str, state: dict) -> Prediction:
                 "top",
                 "choice_code",
                 "llm_s",
+                *(k for k in ORDER_KEYS if k in s1),
             )
         },
         "stage2": [stage2_view(d) for d in state["stage2_scored"]],
@@ -131,6 +156,16 @@ class A2PipelineArm:
             state = self.graph.invoke({"item_id": item.item_id, "raw": item.text})
             out.append(to_prediction(item.item_id, state))
         return out
+
+
+class A2OrderAvgArm(A2PipelineArm):
+    """A2 with order-averaging (configs/a3_candidate_val.json); validation only."""
+
+    name = "a2_order_avg"
+    val_only = True
+
+    def __init__(self, config: dict[str, Any] | None = None, root: Path = DATA_ROOT, pipeline=None):
+        super().__init__(config or load_candidate_config(), root, pipeline)
 
 
 def build_pipeline(

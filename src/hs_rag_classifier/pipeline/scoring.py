@@ -13,6 +13,11 @@ Pairs: stage 1 gives p1 over HS6 options; stage 2 is run for the top two HS6 (a 
 HS6 needs no call: p2 = 1). Every (hs6, cn8) pair scores p1(hs6) x p2(cn8 | hs6); candidates are
 all pairs by that joint score, ties broken by stage-1 rank, then stage-2 rank.
 
+Order-averaging (off unless the config sets order_averaging): each stage's options are scored
+twice, as usually shown and reversed (labels by position), and the two T = 1 distributions are
+averaged per code (average_orders). log(average) then takes the place of the label
+log-probabilities: the stage temperature divides it before renormalising, as above.
+
 Temperature: fitted on rulings validation by minimising the negative log-likelihood of the true
 option, per stage (stage 1: items whose true HS6 was shown; stage 2: scorings of the true HS6
 with more than one child and the true cn8 shown) or shared across both stages.
@@ -121,3 +126,32 @@ def fit_temperature(
     )
     t = float(math.exp(res.x))
     return {"t": t, "nll": nll(groups, t), "nll_t1": nll(groups, 1.0), "n": len(groups)}
+
+
+def average_orders(
+    codes: Sequence[str],
+    forward: Sequence[float],
+    rev_codes: Sequence[str],
+    reverse: Sequence[float],
+) -> dict:
+    """Order-averaging: one stage's options scored in two orders, averaged per code.
+
+    codes/forward: the options as usually shown and their label log-probabilities; rev_codes/
+    reverse: the same options in reversed order (labels by position) and theirs. Each order is
+    renormalised at T = 1 and mapped back to its codes; the two probabilities are averaged
+    arithmetically per code. Returns {"probs": {"forward": {code: p}, "reversed": {code: p}},
+    "averaged": {code: p}, "logprobs": log of the average, aligned with codes} (the logprobs are
+    the per-option scores the stage temperature divides; an average of 0 takes the smallest
+    positive float so its log stays finite).
+    """
+    if sorted(codes) != sorted(rev_codes) or len(set(codes)) != len(codes):
+        raise ValueError("both orders must show the same distinct options")
+    pf = dict(zip(codes, map(float, renormalise(forward)), strict=True))
+    pr = dict(zip(rev_codes, map(float, renormalise(reverse)), strict=True))
+    avg = {c: (pf[c] + pr[c]) / 2 for c in codes}
+    tiny = np.finfo(float).tiny
+    return {
+        "probs": {"forward": pf, "reversed": pr},
+        "averaged": avg,
+        "logprobs": [math.log(max(avg[c], tiny)) for c in codes],
+    }
