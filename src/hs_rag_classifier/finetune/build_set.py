@@ -17,8 +17,15 @@ Leave-one-out: the rulings source and the evidence node both search the rulings 
 (RulingsSource.store). ExcludingStore wraps that store: with an exclusion set it fetches k plus
 the set's size and drops the excluded refs before returning k, so RulingsSource.search votes and
 Pipeline.evidence lists past rulings over the remaining train rulings. With an empty set it is a
-pass-through (the same call, the same arrays). An item's exclusion set is every train row of its
-near-duplicate cluster (cluster_id) and their member references. The arm, the retriever, the
+pass-through (the same call, the same arrays). An item's exclusion set is
+  1. every train row of its near-duplicate cluster (cluster_id) and their member references; and
+  2. every train ruling (with its member references) whose description, after A2's input_check,
+     has the same first NEAR_DUP_PREFIX_CHARS characters and the same cn8 as any ruling in the
+     item's cluster. These are near-duplicates the split's TF-IDF rule did not merge (for example
+     the same text with a longer ending): within the first NEAR_DUP_PREFIX_CHARS characters,
+     which is exactly what the evidence shows (A2's evidence_chars, checked at build time), such
+     a ruling would print the item's own description and code back to it.
+The key map is computed once per build, over the train split. The arm, the retriever, the
 pipeline and the configs are not changed.
 
 Train examples (train rulings only; val and test are never read for training):
@@ -53,6 +60,7 @@ from hs_rag_classifier.arms import a2_pipeline as A2
 from hs_rag_classifier.arms.b1ex_embed import TRAIN_REL
 from hs_rag_classifier.eval.items import DATA_ROOT, REPO_ROOT, SPLITS_DIR
 from hs_rag_classifier.guards import check_retrieval_inputs, check_train_split_only
+from hs_rag_classifier.pipeline import checks
 from hs_rag_classifier.pipeline.graph_a2 import A2Pipeline
 
 BASE_REPO = "Qwen/Qwen3.5-9B"
@@ -69,6 +77,11 @@ PILOT_SEED = 20261108
 OUT = DATA_ROOT / "finetune" / "a4"
 A2_VAL_PASS = DATA_ROOT / "eval" / "repro_val750" / "passes" / "a2_val_1.json"
 TRAIN_COLUMNS = ["ref", "member_refs", "description", "cn8", "hs6", "chapter", "cluster_id"]
+# Rule 2 of the leave-one-out exclusion (module docstring): rulings whose input_check text shares
+# this many leading characters and whose cn8 is the same count as the item's own. It is the
+# evidence line length, A2's evidence_chars; the build fails if the two ever differ.
+NEAR_DUP_PREFIX_CHARS = 300
+MAX_INPUT_CHARS = 1000  # A2's max_input_chars (input_check); checked against the config at build
 
 
 class BuildError(RuntimeError):
@@ -120,8 +133,40 @@ def loo_retriever(retriever) -> tuple[Any, ExcludingStore]:
     return out, store
 
 
-def exclusion_sets(train: pd.DataFrame) -> dict[str, frozenset[str]]:
-    """ref -> every ref and member ref of its near-duplicate cluster (including its own)."""
+def near_dup_key(description: str, cn8: str, prefix_chars: int = NEAR_DUP_PREFIX_CHARS,
+                 max_input_chars: int = MAX_INPUT_CHARS) -> tuple[str, str]:  # fmt: skip
+    """(first prefix_chars characters of the input_check text, cn8)."""
+    text = checks.input_check(description, max_input_chars)["description"]
+    return text[:prefix_chars], str(cn8)
+
+
+def exclusion_sets(train: pd.DataFrame, prefix_chars: int = NEAR_DUP_PREFIX_CHARS,
+                   max_input_chars: int = MAX_INPUT_CHARS) -> dict[str, frozenset[str]]:  # fmt: skip
+    """ref -> its cluster's refs and member refs, plus every ruling (and its member refs) that
+    shares a near-duplicate key with any ruling of the cluster (rules in the module docstring)."""
+    own: dict[str, set[str]] = {}  # ref -> itself and its member refs
+    cluster_rows: dict[str, list[str]] = {}
+    by_key: dict[tuple[str, str], list[str]] = {}
+    key_of: dict[str, tuple[str, str]] = {}
+    for r in train.itertuples(index=False):
+        ref = str(r.ref)
+        own[ref] = {ref, *(str(m) for m in r.member_refs)}
+        cluster_rows.setdefault(str(r.cluster_id), []).append(ref)
+        key_of[ref] = near_dup_key(r.description, r.cn8, prefix_chars, max_input_chars)
+        by_key.setdefault(key_of[ref], []).append(ref)
+    out = {}
+    for r in train.itertuples(index=False):
+        rows = cluster_rows[str(r.cluster_id)]
+        refs = set().union(*(own[x] for x in rows))
+        for x in rows:
+            for y in by_key[key_of[x]]:
+                refs |= own[y]
+        out[str(r.ref)] = frozenset(refs)
+    return out
+
+
+def cluster_sets(train: pd.DataFrame) -> dict[str, frozenset[str]]:
+    """ref -> its cluster's refs and member refs only (rule 1), for the report."""
     by_cluster: dict[str, set[str]] = {}
     for r in train.itertuples(index=False):
         refs = by_cluster.setdefault(str(r.cluster_id), set())
@@ -276,7 +321,12 @@ def build_train(train: pd.DataFrame, pipe: PromptCapture, store: ExcludingStore,
                 max_tokens: int = MAX_TOKENS) -> tuple[pd.DataFrame, pd.DataFrame]:  # fmt: skip
     """(examples, per-item facts) for every train row, leave-one-out."""
     label_ids = label_tokens(tok, pipe.labels)
+    if int(pipe.cfg["evidence_chars"]) != NEAR_DUP_PREFIX_CHARS:
+        raise BuildError("NEAR_DUP_PREFIX_CHARS must equal A2's evidence_chars")
+    if int(pipe.cfg["max_input_chars"]) != MAX_INPUT_CHARS:
+        raise BuildError("MAX_INPUT_CHARS must equal A2's max_input_chars")
     excl = exclusion_sets(train)
+    clus = cluster_sets(train)
     rows, facts = [], []
     for r in train.itertuples(index=False):
         ref = str(r.ref)
@@ -288,7 +338,9 @@ def build_train(train: pd.DataFrame, pipe: PromptCapture, store: ExcludingStore,
                               max_tokens=max_tokens)  # fmt: skip
         rows.extend(ex)
         facts.append({**meta, "hs6": str(r.hs6), "cn8": str(r.cn8), **f,
-                      "excluded": len(excl[ref]), "searches": len(store.seen),
+                      "excluded": len(excl[ref]), "excluded_cluster": len(clus[ref]),
+                      "excluded_near_dup": sorted(excl[ref] - clus[ref]),
+                      "searches": len(store.seen),
                       "leaked_refs": sorted(set(seen) & excl[ref]),
                       "evidence_refs": store.seen[-1] if pipe.cfg["evidence"] else []})  # fmt: skip
     store.exclude, store.seen = frozenset(), []
@@ -438,6 +490,11 @@ def summary(train_ex: pd.DataFrame, facts: pd.DataFrame, labels: Sequence[str]) 
                 )
             },
         },
+        "near_dup_exclusion": {
+            "items_with_extra": int(facts["excluded_near_dup"].map(len).gt(0).sum()),
+            "refs_added_total": int(facts["excluded_near_dup"].map(len).sum()),
+            "distinct_refs_added": len({r for x in facts["excluded_near_dup"] for r in x}),
+        },
         "leakage": {
             "items_with_own_cluster_returned": int(facts["leaked_refs"].map(len).gt(0).sum()),
             "items": len(facts),
@@ -496,7 +553,9 @@ def build(out: Path = OUT, root: Path = DATA_ROOT) -> dict:
         "seeds": {"val_subset": VAL_SUBSET_SEED, "pilot": PILOT_SEED},
         "sizes": {"val_subset_items": VAL_SUBSET_N, "pilot_examples": PILOT_N},
         "train_split": {"file": str(TRAIN_REL), "rows": len(train)},
-        "leave_one_out": "cluster_id rows and their member refs, from the rulings vote and evidence",
+        "leave_one_out": {"rule": "cluster_id rows and member refs, plus rulings with the same first "
+                          "NEAR_DUP_PREFIX_CHARS input_check characters and cn8; vote and evidence",
+                          "near_dup_prefix_chars": NEAR_DUP_PREFIX_CHARS},
         "orders": ["forward", "reversed"], "shuffled": False,
         "summary": summary(train_ex, facts, config["labels"]),
     }  # fmt: skip

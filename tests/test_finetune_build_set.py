@@ -75,7 +75,9 @@ def test_exclusion_removes_the_cluster_from_vote_and_evidence():
     base = tiny_retriever()
     loo, store = F.loo_retriever(base)
     train = pd.DataFrame({"ref": ["r1", "r2", "r3"], "cluster_id": ["c1", "c1", "c3"],
-                          "member_refs": [["r1", "m1"], ["r2"], ["r3"]]})  # fmt: skip
+                          "member_refs": [["r1", "m1"], ["r2"], ["r3"]],
+                          "description": ["knife a", "knife b", "horse"],
+                          "cn8": ["82119290", "82119290", "01012100"]})  # fmt: skip
     excl = F.exclusion_sets(train)
     assert excl["r1"] == excl["r2"] == {"r1", "r2", "m1"} and excl["r3"] == {"r3"}
 
@@ -92,6 +94,32 @@ def test_exclusion_removes_the_cluster_from_vote_and_evidence():
     # the original retriever and its store are untouched
     assert base.sources["rulings"].store is not store
     assert capture(base).item_state("a kitchen knife")["evidence"][0] == "Past ruling: r1 -> x"
+
+
+def test_near_duplicates_in_other_clusters_are_excluded_by_prefix_and_cn8():
+    head = "Amplifier for satellite uplinks. " * 12  # 384 characters: the first 300 agree
+    assert len(head) > F.NEAR_DUP_PREFIX_CHARS
+    train = pd.DataFrame({
+        "ref": ["a1", "a2", "b1", "c1", "d1"],
+        "cluster_id": ["A", "A", "B", "C", "D"],  # b1, c1 and d1 are their own clusters
+        "member_refs": [["a1"], ["a2", "a2m"], ["b1", "b1m"], ["c1"], ["d1"]],
+        "description": [head + "short", "pump", head + "a much longer ending " * 5,
+                        head + "other code", "unrelated " * 40],
+        "cn8": ["85437002", "84137000", "85437002", "85437090", "85437002"],
+    })  # fmt: skip
+    excl = F.exclusion_sets(train)
+    clus = F.cluster_sets(train)
+    # same first 300 characters and same cn8, different clusters: excluded both ways
+    assert {"b1", "b1m"} <= excl["a1"] and "a1" in excl["b1"]
+    assert {"b1", "b1m"} <= excl["a2"]  # through a1, a ruling of a2's cluster
+    # same first 300 characters, different cn8: not excluded
+    assert "c1" not in excl["a1"] and "a1" not in excl["c1"]
+    # same cn8, different text: not excluded
+    assert "d1" not in excl["a1"] and excl["d1"] == {"d1"}
+    assert clus["a1"] == {"a1", "a2", "a2m"} and excl["a1"] - clus["a1"] == {"b1", "b1m"}
+    # the key is taken after A2's input_check (control characters stripped)
+    assert F.near_dup_key("\x07" + head, "85437002") == F.near_dup_key(head, "85437002")
+    assert F.NEAR_DUP_PREFIX_CHARS == 300
 
 
 def test_empty_exclusion_is_a_pass_through():
