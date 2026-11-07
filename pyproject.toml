@@ -47,6 +47,15 @@ ml = [
     "sentence-transformers>=4.1",
     "transformers>=5.21",
 ]
+# A4 QLoRA fine-tuning (with the ml group): PEFT adapters on a bitsandbytes NF4 base. Exact pins:
+# the newest releases that move no locked package. No Unsloth (its releases cap transformers at
+# 5.17) and no TRL (it needs datasets>=4.7, which caps fsspec at 2026.7 or needs
+# huggingface-hub < 2); the trainer is a small answer-token loss on transformers and PEFT.
+finetune = [
+    "peft==0.21.2",
+    "bitsandbytes==0.50.2",
+    "accelerate==1.15.0",
+]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128" }]
