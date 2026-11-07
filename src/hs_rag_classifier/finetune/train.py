@@ -1,7 +1,7 @@
 """A4 QLoRA trainer: answer-token loss on A2's scoring prompts, plain PyTorch, exact resume.
 
     python -m hs_rag_classifier.finetune train --run-name NAME [--manifest PILOT.parquet]
-                                               [--checkpoint-every N] [--resume]
+                         [--checkpoint-every N] [--candidates 250,500,final] [--resume]
     python -m hs_rag_classifier.finetune tf-score --adapter DIR --out OUT.json
 
 Inputs: train_examples.parquet from the A4 set (finetune/build_set), optionally restricted to the
@@ -16,15 +16,21 @@ TARGET_MODULES; gradient checkpointing (use_reentrant False). Loss: cross-entrop
 token only, logits computed at that position only (logits_to_keep=1). Batch 1, gradient
 accumulation 16 (the last group of a pass may be smaller; its loss is averaged over its own
 size), AdamW lr 1e-4, weight decay 0, cosine decay with ceil(3%) warmup over the run's own
-optimiser steps, max grad norm 1.0. No allocator setting.
+optimiser steps, max grad norm 1.0. The allocator setting (PYTORCH_CUDA_ALLOC_CONF, or none) is
+recorded in the params, and a resume must use the same one.
 
 Order: the selected examples shuffled once with SEED (numpy default_rng permutation of the
 example ids sorted); order_sha256 is the SHA-256 of the ids in that order, one per line.
 
 Checkpoints every --checkpoint-every optimiser steps and at the end, under
-runs/<run_name>/checkpoints/step_NNNNN (adapter, optimiser, scheduler, RNG states, data position);
-the last KEEP_LAST step checkpoints plus final/ are kept. --resume continues from the newest one
-with the same config and order (it refuses a different one) and the same MLflow run.
+runs/<run_name>/checkpoints/step_NNNNN and final/ (adapter, optimiser, scheduler, RNG states, data
+position). Every checkpoint is kept: nothing is rotated, overwritten or deleted. --candidates
+marks the scoring candidates in run.json. SIGTERM stops gracefully at an optimiser-step boundary
+with a checkpoint (train_loop), logged in run.json "stops", status.json and an MLflow tag.
+--resume continues exactly from the newest step checkpoint with the same config, order and
+allocator setting (it refuses a different one) and the same MLflow run ("resumes" in run.json).
+status.json in the run folder holds the state (running, stopped, finished, crashed), the step and
+the last checkpoint.
 
 MLflow experiment finetune-a4 (never a test run): params = base repo and revision, every
 hyperparameter, input SHA-256s, builder and trainer commits, seed and order hash; per optimiser
@@ -39,7 +45,7 @@ import json
 import math
 import os
 import random
-import shutil
+import re
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field
@@ -63,7 +69,6 @@ EXPERIMENT = "finetune-a4"
 RUNS_DIR = OUT / "runs"
 EXAMPLES_FILE = "train_examples.parquet"
 SEED = 20261109
-KEEP_LAST = 2
 TARGET_MODULES = ("q_proj", "k_proj", "v_proj", "o_proj", "in_proj_qkv", "in_proj_z", "out_proj",
                   "gate_proj", "up_proj", "down_proj")  # fmt: skip
 COLUMNS = ["example_id", "ref", "stage", "order", "prompt", "n_tokens", "target_label",
@@ -273,20 +278,26 @@ def set_rng_state(s: dict) -> None:
         torch.cuda.set_rng_state_all(s["cuda"])
 
 
-def save_checkpoint(path: Path, model, opt, sched, state: dict) -> Path:
+def save_checkpoint(path: Path, model, opt, sched, state: dict, rng: dict | None = None) -> Path:
+    """Write a checkpoint (adapter, optimiser, scheduler, RNG states, data position) to path.
+
+    Never deletes or overwrites: an existing path is refused, and a stale .tmp folder left by an
+    interrupted save is renamed aside (kept), not removed. rng: the RNG states to record (default:
+    the current ones; a graceful stop passes those captured at the step boundary)."""
     import torch
 
     path = Path(path)
+    if path.exists():
+        raise FileExistsError(f"{path} exists; checkpoints are never overwritten")
     tmp = path.with_name(path.name + ".tmp")
     if tmp.exists():
-        shutil.rmtree(tmp)  # a half-written checkpoint of our own from an interrupted save
+        tmp.rename(path.with_name(f"{path.name}.tmp.stale-{time.time_ns()}"))
     tmp.mkdir(parents=True)
     model.save_pretrained(tmp)
-    torch.save({"optimizer": opt.state_dict(), "scheduler": sched.state_dict(), "rng": rng_state(),
-                "state": state}, tmp / "trainer_state.pt")  # fmt: skip
+    torch.save({"optimizer": opt.state_dict(), "scheduler": sched.state_dict(),
+                "rng": rng if rng is not None else rng_state(), "state": state},
+               tmp / "trainer_state.pt")  # fmt: skip
     (tmp / "state.json").write_text(json.dumps(state, indent=1))
-    if path.exists():
-        shutil.rmtree(path)
     tmp.rename(path)
     return path
 
@@ -307,20 +318,33 @@ def load_checkpoint(path: Path, model, opt, sched) -> dict:
     return ck["state"]
 
 
+STEP_DIR = re.compile(r"\Astep_\d{5}\Z")
+
+
 def step_checkpoints(ck_dir: Path) -> list[Path]:
+    """The run's completed step checkpoints, oldest first (in-progress or stale .tmp excluded)."""
     from hs_rag_classifier.guards import check_retrieval_inputs
 
-    found = [p for p in Path(ck_dir).glob("step_*") if p.is_dir() and not p.name.endswith(".tmp")]
+    found = [p for p in Path(ck_dir).glob("step_*") if p.is_dir() and STEP_DIR.match(p.name)]
     # the repo's rule for any folder walk (guards.py), though these are the run's own checkpoints
     return sorted(check_retrieval_inputs(found, DATA_ROOT))
 
 
-def prune(ck_dir: Path, keep: int = KEEP_LAST) -> list[Path]:
-    """Remove all but the newest `keep` step checkpoints of this run (final/ is never touched)."""
-    old = step_checkpoints(ck_dir)[:-keep] if keep else step_checkpoints(ck_dir)
-    for p in old:
-        shutil.rmtree(p)
-    return old
+def candidate_checkpoints(spec: str, every: int, total: int) -> dict[str, str]:
+    """'250,500,final' -> {"step_250": "checkpoints/step_00250", ..., "final": "checkpoints/final"}.
+    Each numbered candidate must be a checkpoint step (a multiple of every, below total)."""
+    out = {}
+    for c in (x.strip() for x in spec.split(",") if x.strip()):
+        if c == "final":
+            out["final"] = "checkpoints/final"
+            continue
+        n = int(c)
+        if n <= 0 or n % every or n >= total:
+            raise ValueError(
+                f"candidate {n} is not a checkpoint step (every {every}, total {total})"
+            )
+        out[f"step_{n}"] = f"checkpoints/step_{n:05d}"
+    return out
 
 
 # --- the loop ----------------------------------------------------------------------------------
@@ -328,14 +352,24 @@ def prune(ck_dir: Path, keep: int = KEEP_LAST) -> list[Path]:
 
 def train_loop(model, examples: Sequence[tuple[str, list[int], int]], cfg: TrainConfig,
                ck_dir: Path, label_ids: Sequence[int], a_index: int = 0,
-               checkpoint_every: int = 10, resume: bool = False,
+               checkpoint_every: int = 25, resume: bool = False,
                log: Callable[[dict, int], None] | None = None,
-               stop_after_step: int | None = None, device: str = "cuda") -> dict:  # fmt: skip
+               stop_after_step: int | None = None, device: str = "cuda",
+               after_example: Callable[[int], None] | None = None,
+               on_stop: Callable[[dict], None] | None = None) -> dict:  # fmt: skip
     """One pass over examples (in the given order). Returns a summary dict.
 
     examples: (example_id, token ids, target token id). Checkpoints every checkpoint_every
-    optimiser steps (keeping KEEP_LAST) and at the end (final/). resume: continue from the newest
-    step checkpoint in ck_dir. stop_after_step: stop (after checkpointing) at that step; tests."""
+    optimiser steps and at the end (final/); none is ever removed. resume: continue from the
+    newest step checkpoint in ck_dir. SIGTERM (when run in the main thread) stops gracefully:
+    mid-accumulation, the partial group is discarded (after its last example the step is completed
+    instead) and a checkpoint of the last completed
+    optimiser step is written with the RNG states captured at that boundary (unless that step's
+    checkpoint exists already), so resuming from it is exact. stop_after_step: stop (after
+    checkpointing) at that step; after_example(n): called after each example (tests)."""
+    import signal
+    import threading
+
     import torch
 
     ck_dir = Path(ck_dir)
@@ -356,54 +390,82 @@ def train_loop(model, examples: Sequence[tuple[str, list[int], int]], cfg: Train
         state = got
     labels_t = torch.tensor(list(label_ids), device=device)
     cuda = device.startswith("cuda") and torch.cuda.is_available()
+    stop = {"reason": None}
+
+    def on_term(signum, _frame):
+        stop["reason"] = f"received {signal.Signals(signum).name}"
+
+    main = threading.current_thread() is threading.main_thread()
+    prev = signal.signal(signal.SIGTERM, on_term) if main else None
+
+    def graceful(st: dict, rng: dict) -> dict:
+        path = ck_dir / f"step_{st['step']:05d}"
+        if not path.exists():
+            save_checkpoint(path, model, opt, sched, st, rng=rng)
+        out = {"stopped": stop["reason"], "stopped_at": st["step"], "checkpoint": str(path), **st}
+        if on_stop:
+            on_stop(out)
+        return out
+
     model.train()
     t_run = time.perf_counter()
-    while state["step"] < total:
-        group = examples[state["position"] : state["position"] + cfg.grad_accum]
-        if cuda:
-            torch.cuda.reset_peak_memory_stats()
-        t0 = time.perf_counter()
-        loss_sum, n_tok = 0.0, 0
-        for _eid, ids, target in group:
-            x = torch.tensor([ids], device=device)
-            logits = answer_logits(model, x)
-            loss = answer_loss(logits, torch.tensor([int(target)], device=device))
-            (loss / len(group)).backward()
-            loss_sum += float(loss.detach())
-            n_tok += len(ids)
-            state["n_seen"] += 1
-            state["n_a"] += int(int(logits[0, labels_t].argmax()) == a_index)
-        gn = torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad],
-                                            cfg.max_grad_norm)  # fmt: skip
-        lr = sched.get_last_lr()[0]
-        opt.step()
-        sched.step()
-        opt.zero_grad(set_to_none=True)
-        if cuda:
-            torch.cuda.synchronize()
-        dt = time.perf_counter() - t0
-        state["step"] += 1
-        state["position"] += len(group)
-        m = {"loss": loss_sum / len(group), "lr": lr, "grad_norm": float(gn), "tokens_per_s": n_tok / dt,
-             "step_seconds": dt, "examples": len(group),
-             "peak_gpu_gib": (torch.cuda.max_memory_allocated() / 2**30) if cuda else 0.0,
-             "share_a_running": state["n_a"] / state["n_seen"]}  # fmt: skip
-        if log:
-            log(m, state["step"])
-        if state["step"] % checkpoint_every == 0 and state["step"] < total:
-            save_checkpoint(ck_dir / f"step_{state['step']:05d}", model, opt, sched, state)
-            prune(ck_dir)
-        if (
-            stop_after_step is not None
-            and state["step"] >= stop_after_step
-            and state["step"] < total
-        ):
-            if state["step"] % checkpoint_every:
+    n_done = 0
+    try:
+        while state["step"] < total:
+            boundary, boundary_rng = dict(state), rng_state()
+            if stop["reason"]:
+                return graceful(boundary, boundary_rng)
+            group = examples[state["position"] : state["position"] + cfg.grad_accum]
+            if cuda:
+                torch.cuda.reset_peak_memory_stats()
+            t0 = time.perf_counter()
+            loss_sum, n_tok = 0.0, 0
+            for i, (_eid, ids, target) in enumerate(group, 1):
+                x = torch.tensor([ids], device=device)
+                logits = answer_logits(model, x)
+                loss = answer_loss(logits, torch.tensor([int(target)], device=device))
+                (loss / len(group)).backward()
+                loss_sum += float(loss.detach())
+                n_tok += len(ids)
+                state["n_seen"] += 1
+                state["n_a"] += int(int(logits[0, labels_t].argmax()) == a_index)
+                n_done += 1
+                if after_example:
+                    after_example(n_done)
+                if stop["reason"] and i < len(group):  # after the last one, finish the step
+                    opt.zero_grad(set_to_none=True)  # the partial group is discarded
+                    return graceful(boundary, boundary_rng)
+            gn = torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad],
+                                                cfg.max_grad_norm)  # fmt: skip
+            lr = sched.get_last_lr()[0]
+            opt.step()
+            sched.step()
+            opt.zero_grad(set_to_none=True)
+            if cuda:
+                torch.cuda.synchronize()
+            dt = time.perf_counter() - t0
+            state["step"] += 1
+            state["position"] += len(group)
+            m = {"loss": loss_sum / len(group), "lr": lr, "grad_norm": float(gn),
+                 "tokens_per_s": n_tok / dt, "step_seconds": dt, "examples": len(group),
+                 "peak_gpu_gib": (torch.cuda.max_memory_allocated() / 2**30) if cuda else 0.0,
+                 "share_a_running": state["n_a"] / state["n_seen"]}  # fmt: skip
+            if log:
+                log(m, state["step"])
+            if state["step"] < total and state["step"] % checkpoint_every == 0:
                 save_checkpoint(ck_dir / f"step_{state['step']:05d}", model, opt, sched, state)
-                prune(ck_dir)
-            return {"stopped_at": state["step"], **state}
-    save_checkpoint(ck_dir / "final", model, opt, sched, state)
-    return {**state, "warmup_steps": warmup, "seconds": time.perf_counter() - t_run}
+            if state["step"] < total and stop["reason"]:
+                return graceful(dict(state), rng_state())
+            if stop_after_step is not None and stop_after_step <= state["step"] < total:
+                path = ck_dir / f"step_{state['step']:05d}"
+                if not path.exists():
+                    save_checkpoint(path, model, opt, sched, state)
+                return {"stopped_at": state["step"], **state}
+        save_checkpoint(ck_dir / "final", model, opt, sched, state)
+        return {**state, "warmup_steps": warmup, "seconds": time.perf_counter() - t_run}
+    finally:
+        if main:
+            signal.signal(signal.SIGTERM, prev)
 
 
 # --- CLI ---------------------------------------------------------------------------------------
@@ -415,6 +477,22 @@ def git_commit() -> dict[str, Any]:
     return R.git_info()
 
 
+def write_status(run_dir: Path, **fields) -> None:
+    """runs/<name>/status.json, replaced atomically (state, step, last checkpoint, reason...)."""
+    path = Path(run_dir) / "status.json"
+    cur = json.loads(path.read_text()) if path.exists() else {}
+    cur.update(fields, pid=os.getpid(), updated=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+    tmp = path.with_name("status.json.tmp")
+    tmp.write_text(json.dumps(cur, indent=1))
+    tmp.replace(path)
+
+
+def append_info(info_path: Path, key: str, entry: dict) -> None:
+    info = json.loads(info_path.read_text())
+    info.setdefault(key, []).append(entry)
+    info_path.write_text(json.dumps(info, indent=1))
+
+
 def cmd_train(a) -> int:
     import torch
     from transformers import AutoTokenizer
@@ -424,10 +502,12 @@ def cmd_train(a) -> int:
 
     cfg = TrainConfig()
     run_dir = Path(a.runs_dir) / a.run_name
-    if run_dir.exists() and not a.resume:
-        raise SystemExit(f"{run_dir} exists; use --resume to continue it")
+    info_path = run_dir / "run.json"
+    if info_path.exists() and not a.resume:
+        raise SystemExit(f"{info_path} exists; use --resume to continue that run")
     if (run_dir / "checkpoints" / "final").exists():
         raise SystemExit(f"{run_dir} is finished (checkpoints/final exists)")
+    alloc = os.environ.get("PYTORCH_CUDA_ALLOC_CONF") or "none"
     df, facts = load_examples(Path(a.data_dir), Path(a.manifest) if a.manifest else None)
     order, order_sha = shuffled_order(df["example_id"], cfg.seed)
     tok = AutoTokenizer.from_pretrained(TOKENIZER_DIR)
@@ -437,12 +517,15 @@ def cmd_train(a) -> int:
     labels = A2.load_config()["labels"]
     label_ids = label_token_ids(tok, labels)
     commit = git_commit()
-    run_dir.mkdir(parents=True, exist_ok=True)
-    info_path = run_dir / "run.json"
-    info = json.loads(info_path.read_text()) if info_path.exists() else {}
-    if info and (info["order_sha256"] != order_sha or info["config_key"] != cfg.key()):
-        raise SystemExit("the run's order or config differs from the one being resumed")
     total = n_optimiser_steps(len(examples), cfg.grad_accum)
+    candidates = candidate_checkpoints(a.candidates, a.checkpoint_every, total)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    info = json.loads(info_path.read_text()) if info_path.exists() else {}
+    if info:
+        for k, v in (("order_sha256", order_sha), ("config_key", cfg.key()), ("alloc_conf", alloc),
+                     ("checkpoint_every", a.checkpoint_every)):  # fmt: skip
+            if info.get(k) != v:
+                raise SystemExit(f"the resumed run has {k}={info.get(k)!r}, this one {v!r}")
     params = {"base_repo": BASE_REPO, "base_revision": BASE_REVISION, **{
         k: (",".join(v) if isinstance(v, tuple) else v) for k, v in asdict(cfg).items() if k != "extra"},
         "config_key": cfg.key(), "n_examples": len(examples), "optimiser_steps": total,
@@ -451,9 +534,12 @@ def cmd_train(a) -> int:
         **{f"sha256_{k}": v for k, v in facts["sha256"].items()},
         "selection": Path(a.manifest).name if a.manifest else "all",
         "builder_commit": facts["builder_commit"], "trainer_commit": commit["commit"],
-        "checkpoint_every": a.checkpoint_every, "keep_last": KEEP_LAST}  # fmt: skip
+        "checkpoint_every": a.checkpoint_every, "keep_all_checkpoints": True,
+        "alloc_conf": alloc, "candidates": ",".join(candidates)}  # fmt: skip
     R.mlflow.set_tracking_uri(R.tracking_uri())
     exp = R._experiment_id(EXPERIMENT, R.MLFLOW_DIR / "artifacts")
+    ck_dir = run_dir / "checkpoints"
+    resume_from = step_checkpoints(ck_dir)[-1] if a.resume and step_checkpoints(ck_dir) else None
     start = (
         {"run_id": info["mlflow_run_id"]}
         if info
@@ -464,27 +550,55 @@ def cmd_train(a) -> int:
             R.mlflow.log_params(params)
             R.mlflow.set_tags({"split": "train", "test_run": "false", "git_dirty": str(commit["dirty"]).lower(),
                                "run_dir": str(run_dir)})  # fmt: skip
-            info = {**params, "mlflow_run_id": run.info.run_id, "run_dir": str(run_dir)}
+            info = {**params, "mlflow_run_id": run.info.run_id, "run_dir": str(run_dir),
+                    "candidates": candidates}  # fmt: skip
             info_path.write_text(json.dumps(info, indent=1))
             (run_dir / "order.txt").write_text("\n".join(order) + "\n")
+        if resume_from is not None:
+            append_info(info_path, "resumes", {"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                                               "from": str(resume_from), "trainer_commit": commit["commit"]})  # fmt: skip
+            R.mlflow.set_tag(f"resumed_from_{resume_from.name}", "true")
+        write_status(run_dir, state="running", total_steps=total, step=None, reason=None,
+                     resumed_from=str(resume_from) if resume_from else None)  # fmt: skip
         steps_log = (run_dir / "steps.jsonl").open("a")
 
         def log(m: dict, step: int) -> None:
             R.mlflow.log_metrics(m, step=step)
             steps_log.write(json.dumps({"step": step, "time": time.time(), **m}) + "\n")
             steps_log.flush()
+            last = step - step % a.checkpoint_every
+            write_status(run_dir, state="running", step=step,
+                         last_checkpoint=f"checkpoints/step_{last:05d}" if last else None)  # fmt: skip
             print(json.dumps({"step": step, **{k: round(v, 5) for k, v in m.items()}}), flush=True)
 
-        base = load_base()
-        torch.manual_seed(cfg.seed)  # LoRA A initialisation and dropout
-        model = attach_lora(base, cfg)
-        res = train_loop(model, examples, cfg, run_dir / "checkpoints", label_ids, labels.index("A"),
-                         a.checkpoint_every, resume=a.resume and bool(step_checkpoints(run_dir / "checkpoints")),
-                         log=log)  # fmt: skip
+        def on_stop(out: dict) -> None:
+            entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "step": out["stopped_at"],
+                     "reason": out["stopped"], "checkpoint": out["checkpoint"]}  # fmt: skip
+            append_info(info_path, "stops", entry)
+            R.mlflow.set_tag(f"stopped_at_step_{out['stopped_at']}", out["stopped"])
+            write_status(run_dir, state="stopped", step=out["stopped_at"], reason=out["stopped"],
+                         last_checkpoint=str(Path(out["checkpoint"]).relative_to(run_dir)))  # fmt: skip
+            print(json.dumps({"stopped": entry}), flush=True)
+
+        try:
+            base = load_base()
+            torch.manual_seed(cfg.seed)  # LoRA A initialisation and dropout
+            model = attach_lora(base, cfg)
+            res = train_loop(model, examples, cfg, ck_dir, label_ids, labels.index("A"),
+                             a.checkpoint_every, resume=resume_from is not None, log=log,
+                             on_stop=on_stop)  # fmt: skip
+        except BaseException as e:
+            write_status(run_dir, state="crashed", reason=f"{type(e).__name__}: {str(e)[:500]}")
+            raise
+        if "stopped" in res:
+            return 0
         R.mlflow.log_metrics(
             {"train_seconds": res.get("seconds", 0.0), "final_share_a": res["n_a"] / res["n_seen"]}
         )
         (run_dir / "result.json").write_text(json.dumps(res, indent=1, default=str))
+        write_status(
+            run_dir, state="finished", step=res["step"], last_checkpoint="checkpoints/final"
+        )
     print(json.dumps({k: v for k, v in res.items()}, default=str))
     return 0
 
@@ -548,7 +662,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     t = sub.add_parser("train", help="train an A4 LoRA adapter (resumable)")
     t.add_argument("--run-name", required=True)
     t.add_argument("--manifest", type=Path, help="restrict to this manifest's example ids")
-    t.add_argument("--checkpoint-every", type=int, default=10)
+    t.add_argument("--checkpoint-every", type=int, default=25)
+    t.add_argument(
+        "--candidates",
+        default="250,500,final",
+        help="checkpoints to mark as scoring candidates in run.json",
+    )
     t.add_argument("--resume", action="store_true")
     t.add_argument("--data-dir", type=Path, default=OUT)
     t.add_argument("--runs-dir", type=Path, default=RUNS_DIR)

@@ -2,7 +2,11 @@
 gate-row selection and the paired bootstrap. A tiny randomly initialised Qwen3.5 on the CPU and
 small fixtures; no real model, no server, no data."""
 
+import itertools
 import json
+import os
+import signal
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -134,8 +138,12 @@ def test_exact_resume_matches_a_straight_run(tmp_path):
     ):
         for k in sa:
             assert torch.equal(sa[k], sb[k]), k
-    # the last KEEP_LAST step checkpoints plus final/
-    assert [p.name for p in T.step_checkpoints(tmp_path / "b")] == ["step_00003", "step_00004"]
+    # every checkpoint is kept (no rotation)
+    assert [p.name for p in T.step_checkpoints(tmp_path / "b")] == [
+        "step_00002",
+        "step_00003",
+        "step_00004",
+    ]
 
 
 def test_resume_refuses_a_different_order(tmp_path):
@@ -286,3 +294,114 @@ def test_split_chat_recovers_system_and_user():
     assert S.split_chat(t) == ("S\nx", "U")
     with pytest.raises(ValueError):
         S.split_chat("plain")
+
+
+# --- no deletion, graceful SIGTERM stop, candidates ----------------------------------------------
+
+
+def _ck_files(d):
+    return sorted(str(p.relative_to(d)) for p in Path(d).rglob("*"))
+
+
+def test_no_checkpoint_is_ever_deleted(tmp_path):
+    cfg = T.TrainConfig(grad_accum=2)
+    ex = examples(10)  # 5 steps
+    seen = []
+    T.train_loop(tiny_model(cfg=cfg), ex, cfg, tmp_path, LABEL_IDS, checkpoint_every=1, device="cpu",
+                 after_example=lambda n: seen.append(set(_ck_files(tmp_path))))  # fmt: skip
+    # the set of files only ever grows
+    for before, after in itertools.pairwise(seen):
+        assert before <= after
+    names = [p.name for p in T.step_checkpoints(tmp_path)]
+    assert names == ["step_00001", "step_00002", "step_00003", "step_00004"]
+    assert (tmp_path / "final" / "adapter_model.safetensors").is_file()
+
+
+def test_save_checkpoint_never_overwrites_and_keeps_stale_tmp(tmp_path):
+    m = tiny_model()
+    opt, sched, _ = T.make_optimiser(m, T.TrainConfig(), 4)
+    p = T.save_checkpoint(tmp_path / "step_00001", m, opt, sched, {"step": 1})
+    with pytest.raises(FileExistsError):
+        T.save_checkpoint(p, m, opt, sched, {"step": 1})
+    (tmp_path / "step_00002.tmp").mkdir()
+    (tmp_path / "step_00002.tmp" / "partial").write_text("x")
+    T.save_checkpoint(tmp_path / "step_00002", m, opt, sched, {"step": 2})
+    stale = [q for q in tmp_path.iterdir() if q.name.startswith("step_00002.tmp.stale-")]
+    assert len(stale) == 1 and (stale[0] / "partial").read_text() == "x"
+    assert [q.name for q in T.step_checkpoints(tmp_path)] == ["step_00001", "step_00002"]
+
+
+def test_trainer_source_has_no_deletion_calls():
+    src = Path(T.__file__).read_text()
+    for call in ("rmtree", "os.remove", ".unlink(", "os.rmdir", ".rmdir("):
+        assert call not in src, call
+
+
+@pytest.mark.parametrize(
+    "at_example", [5, 6]
+)  # 5: mid-accumulation (group 3 of 2); 6: at a boundary
+def test_sigterm_checkpoints_and_resume_matches_an_uninterrupted_run(tmp_path, at_example):
+    cfg = T.TrainConfig(grad_accum=2)
+    ex = examples(10)  # 5 steps
+    straight = tiny_model(cfg=cfg)
+    r1 = T.train_loop(
+        straight, ex, cfg, tmp_path / "a", LABEL_IDS, checkpoint_every=4, device="cpu"
+    )
+
+    stops = []
+
+    def send(n):
+        if n == at_example:
+            os.kill(os.getpid(), signal.SIGTERM)
+
+    first = tiny_model(cfg=cfg)
+    prev = signal.getsignal(signal.SIGTERM)
+    out = T.train_loop(first, ex, cfg, tmp_path / "b", LABEL_IDS, checkpoint_every=4, device="cpu",
+                       after_example=send, on_stop=stops.append)  # fmt: skip
+    assert signal.getsignal(signal.SIGTERM) is prev  # handler restored
+    want = at_example // 2 if at_example % 2 == 0 else (at_example - 1) // 2
+    assert out["stopped"] == "received SIGTERM" and out["stopped_at"] == want and stops == [out]
+    assert [p.name for p in T.step_checkpoints(tmp_path / "b")] == [f"step_{want:05d}"]
+    st = json.loads((tmp_path / "b" / f"step_{want:05d}" / "state.json").read_text())
+    assert st["step"] == want and st["position"] == 2 * want and st["n_seen"] == 2 * want
+    assert not (tmp_path / "b" / "final").exists()
+
+    resumed = tiny_model(cfg=cfg, lora_seed=99)
+    torch.manual_seed(4242)
+    r2 = T.train_loop(resumed, ex, cfg, tmp_path / "b", LABEL_IDS, checkpoint_every=4, resume=True,
+                      device="cpu")  # fmt: skip
+    assert r2["step"] == 5 and r2["n_seen"] == 10 and r2["n_a"] == r1["n_a"]
+    a, b = _state(straight), _state(resumed)
+    for k in a:
+        assert torch.equal(a[k], b[k]), k
+    oa = torch.load(tmp_path / "a" / "final" / "trainer_state.pt", weights_only=False)
+    ob = torch.load(tmp_path / "b" / "final" / "trainer_state.pt", weights_only=False)
+    assert oa["scheduler"] == ob["scheduler"]
+    for sa, sb in zip(
+        oa["optimizer"]["state"].values(), ob["optimizer"]["state"].values(), strict=True
+    ):
+        for k in sa:
+            assert torch.equal(sa[k], sb[k]), k
+
+
+def test_candidate_checkpoints():
+    c = T.candidate_checkpoints("250,500,final", 25, 745)
+    assert c == {"step_250": "checkpoints/step_00250", "step_500": "checkpoints/step_00500",
+                 "final": "checkpoints/final"}  # fmt: skip
+    for bad in ("260", "750", "0"):
+        with pytest.raises(ValueError):
+            T.candidate_checkpoints(bad, 25, 745)
+
+
+def test_status_and_info_records(tmp_path):
+    T.write_status(tmp_path, state="running", step=3)
+    T.write_status(tmp_path, step=4)
+    st = json.loads((tmp_path / "status.json").read_text())
+    assert st["state"] == "running" and st["step"] == 4 and st["pid"] == os.getpid()
+    (tmp_path / "run.json").write_text(json.dumps({"candidates": {"final": "checkpoints/final"}}))
+    T.append_info(tmp_path / "run.json", "stops", {"step": 7})
+    T.append_info(tmp_path / "run.json", "stops", {"step": 9})
+    info = json.loads((tmp_path / "run.json").read_text())
+    assert info["stops"] == [{"step": 7}, {"step": 9}] and info["candidates"] == {
+        "final": "checkpoints/final"
+    }
