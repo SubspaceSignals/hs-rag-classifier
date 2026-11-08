@@ -175,16 +175,22 @@ def build_pipeline(
     HTTP client for scoring and the cn8 path texts."""
     import httpx
 
-    from hs_rag_classifier.pipeline.graph_a2 import A2Pipeline
+    from hs_rag_classifier.pipeline import llm
+    from hs_rag_classifier.pipeline.graph_a2 import A2Pipeline, lora_scales
     from hs_rag_classifier.pipeline.options import load_cn8_paths
 
-    a1 = A1.build_pipeline(config, root, retriever, tariff, api)  # runs the one-slot guard
+    scales = lora_scales(config)  # refuses half a LoRA setting before anything runs
+    a1 = A1.build_pipeline(config, root, retriever, tariff, api)  # one-slot and adapter guards
+    chat = a1.chat
+    if scales is not None:  # the rationale call at its own per-request scale
+        chat = llm.make_chat(config["client"], config["client"]["base_url"],
+                             lora=llm.lora_request(scales["rationale"]))  # fmt: skip
     http = httpx.Client(
         base_url=config["client"]["base_url"], timeout=config["client"].get("timeout_s", 120)
     )
     pipe = A2Pipeline(
         config,
-        a1.chat,
+        chat,
         a1.retriever,
         a1.tariff,
         a1.validator,

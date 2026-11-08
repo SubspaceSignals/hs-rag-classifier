@@ -19,7 +19,9 @@ as soon as its MLflow run exists, so a run that fails part-way is still counted.
 Arm hook (optional): an arm with after_scoring(frame, n_resamples, seed) is called once every
 item is scored; it returns {"frame", "metrics", "flat"}: the frame with added per-item columns
 (saved in predictions.parquet), nested metrics stored under "arm_metrics" in metrics.json, and
-flat MLflow metrics logged next to the harness's. Arms without it are unchanged.
+flat MLflow metrics logged next to the harness's. Arms without it are unchanged. An arm may
+also set run_params (a dict of extra MLflow params, e.g. A4's candidate and adapter SHA-256),
+logged with the harness's params on a new run; arms without it log exactly the same params.
 
 Resumable runs: predictions are appended to ~/data/hs-rag-classifier/eval/partial/<run_id>.jsonl
 after each predict call (with their latency), so a run that stops part-way keeps its finished
@@ -137,6 +139,14 @@ def _a3(valid8: set[str]) -> Arm:
     return A3Arm()
 
 
+def _a4_candidate(valid8: set[str], adapter=None, adapter_sha256=None, candidate=None) -> Arm:
+    from hs_rag_classifier.arms import a4_candidate as A4
+
+    if not (adapter and adapter_sha256 and candidate):
+        raise ValueError("a4_candidate needs --adapter, --adapter-sha256 and --candidate")
+    return A4.A4CandidateArm(A4.load_config(adapter, adapter_sha256, candidate))
+
+
 def _a2_order_avg(valid8: set[str]) -> Arm:
     from hs_rag_classifier.arms.a2_pipeline import A2OrderAvgArm
 
@@ -155,13 +165,20 @@ ARMS = {
     "a2": _a2,
     "a2_order_avg": _a2_order_avg,
     "a3": _a3,
+    "a4_candidate": _a4_candidate,
 }
+ARM_OPTIONS = {"a4_candidate": ("adapter", "adapter_sha256", "candidate")}
 
 
-def make_arm(name: str, valid8: set[str]) -> Arm:
+def make_arm(name: str, valid8: set[str], **options: Any) -> Arm:
+    """options: only for arms in ARM_OPTIONS (a4_candidate's adapter); None values are unset."""
     if name not in ARMS:
         raise ValueError(f"unknown arm {name!r}; choose from {', '.join(sorted(ARMS))}")
-    return ARMS[name](valid8)
+    given = {k: v for k, v in options.items() if v is not None}
+    extra = set(given) - set(ARM_OPTIONS.get(name, ()))
+    if extra:
+        raise ValueError(f"arm {name} takes no {', '.join(sorted(extra))}")
+    return ARMS[name](valid8, **given) if name in ARM_OPTIONS else ARMS[name](valid8)
 
 
 def check_test_guard(arm: Arm, evalset: EvalSet, git: dict, limit: int | None) -> None:
@@ -350,6 +367,7 @@ def run_eval(
                     "limit": limit,
                     "headline_review_rate": review_rate,
                     "bootstrap_resamples": n_resamples,
+                    **(getattr(arm, "run_params", None) or {}),
                 }
             )
             mlflow.set_tags(

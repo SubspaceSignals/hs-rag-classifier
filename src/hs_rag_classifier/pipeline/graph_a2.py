@@ -29,6 +29,11 @@ pair ranking then follow from those, unchanged; a single-child HS6 still needs n
 stage dict keeps the forward call's token, top, floored and outside_mass, sums tokens and llm_s
 over both calls, and adds "orders" (each order's codes, raw label log-probabilities, token,
 floored, outside_mass and T = 1 probabilities keyed by code) and "averaged" (keyed by code).
+
+LoRA scales (config a2.lora_scales {"scoring", "rationale"}, default absent; A4): with them, every
+stage-1 and stage-2 scoring request carries the per-request "lora" field at the scoring scale;
+the rationale call's scale goes on the chat client (arms.a2_pipeline.build_pipeline). They need
+the config's adapter block (and it needs them). Absent, no request has a "lora" field.
 """
 
 from __future__ import annotations
@@ -43,7 +48,7 @@ import openai
 
 from hs_rag_classifier.pipeline import checks, scoring
 from hs_rag_classifier.pipeline.graph import DISCLAIMER, Pipeline, State, fill
-from hs_rag_classifier.pipeline.llm import call_json, score_call
+from hs_rag_classifier.pipeline.llm import call_json, lora_request, score_call
 
 A2_PROMPTS = (
     "a2_stage1_system",
@@ -54,6 +59,20 @@ A2_PROMPTS = (
     "a2_rationale_user",
 )
 TOP_TOKENS_KEPT = 5
+LORA_CALLS = ("scoring", "rationale")
+
+
+def lora_scales(config: dict[str, Any]) -> dict[str, float] | None:
+    """The per-call-type LoRA scales, or None; refuses scales without an adapter or the reverse."""
+    scales = config.get("a2", {}).get("lora_scales")
+    adapter = config.get("adapter")
+    if (scales is None) != (adapter is None):
+        raise ValueError("a2.lora_scales and the adapter block go together: give both or neither")
+    if scales is None:
+        return None
+    if sorted(scales) != sorted(LORA_CALLS):
+        raise ValueError(f"a2.lora_scales must set exactly {LORA_CALLS}, got {sorted(scales)}")
+    return {k: float(scales[k]) for k in LORA_CALLS}
 
 
 def load_a2_prompts() -> dict[str, str]:
@@ -114,10 +133,18 @@ class A2Pipeline(Pipeline):
         self.paths = paths
         self.a2_prompts = prompts or load_a2_prompts()
         self.order_averaging = bool(self.a2.get("order_averaging", False))
+        scales = lora_scales(config)
+        self.scoring_lora = None if scales is None else lora_request(scales["scoring"])
 
     def _score(self, system: str, user: str, labels: list[str], name: str) -> dict:
         r = score_call(
-            self.http, self.cfg["client"], system, user, int(self.a2["top_logprobs"]), name
+            self.http,
+            self.cfg["client"],
+            system,
+            user,
+            int(self.a2["top_logprobs"]),
+            name,
+            lora=self.scoring_lora,
         )
         d = scoring.label_logprobs(r["top"], labels)
         d.update(

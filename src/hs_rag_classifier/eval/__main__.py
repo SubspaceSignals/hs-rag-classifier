@@ -30,8 +30,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 2
     valid8, valid10 = R.valid_codes(args.root)
     try:
-        arm = R.make_arm(args.arm, valid8)
-    except llm.ServerSlotsError as exc:
+        arm = R.make_arm(args.arm, valid8, adapter=args.adapter,
+                         adapter_sha256=args.adapter_sha256, candidate=args.candidate)  # fmt: skip
+    except (llm.ServerSlotsError, llm.AdapterError, ValueError) as exc:
         print(f"Refused: {exc}", file=sys.stderr)
         return 2
     try:
@@ -81,6 +82,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--allow-multislot", action="store_true",
                      help="dev only: continue on a llama-server without exactly one slot "
                      "(not on test)")  # fmt: skip
+    run.add_argument("--adapter", type=Path, help="a4_candidate only: the candidate's LoRA GGUF")
+    run.add_argument("--adapter-sha256", help="a4_candidate only: that GGUF's SHA-256")
+    run.add_argument("--candidate", help="a4_candidate only: step_00250, step_00500 or final")
     run.set_defaults(func=cmd_run)
     tr = sub.add_parser("test-runs", help="list logged test-set runs and the count per arm")
     tr.add_argument("--log", type=Path, default=R.TEST_LOG)

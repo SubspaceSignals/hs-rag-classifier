@@ -158,6 +158,8 @@ def build_pipeline(config: dict[str, Any], root: Path = DATA_ROOT, retriever=Non
     from hs_rag_classifier.retrieval.hybrid import load_config as load_hybrid
 
     server_tags = llm.check_server_slots(config["client"]["base_url"])
+    server_tags.update(llm.check_server_adapters(config["client"]["base_url"],
+                                                 config.get("adapter")))  # fmt: skip
     tariff = tariff or load_tariff(root)
     retriever = retriever or HybridRetriever(load_hybrid(), root)
     chat = llm.make_chat(config["client"], config["client"]["base_url"])

@@ -1,0 +1,24 @@
+{
+  "status": "validation only, not frozen",
+  "base_config": {
+    "path": "configs/a3_pipeline.json",
+    "sha256": "74f4e39197e4a35ddeee8bc60e94ee54fd804d0eeeab8df8b5e74fb334c7d58b"
+  },
+  "candidates": [
+    "step_00250",
+    "step_00500",
+    "final"
+  ],
+  "candidate_source": "runs/a4_full checkpoints, each converted to GGUF; path and SHA-256 supplied per run (--adapter, --adapter-sha256, --candidate)",
+  "temperature": {
+    "mode": "per_stage",
+    "stage1": 1.0,
+    "stage2": 1.0,
+    "status": "T = 1 for candidate selection; refitted offline for the chosen candidate only"
+  },
+  "lora_scales": {
+    "scoring": 1.0,
+    "rationale": 0.0
+  },
+  "selection_rule": "fixed 7 Nov 2026: highest val cn8 top-1 at T = 1; ties by lower joint val NLL at T = 1, then the later step; one full val run per candidate, nothing re-run or re-chosen after seeing results"
+}

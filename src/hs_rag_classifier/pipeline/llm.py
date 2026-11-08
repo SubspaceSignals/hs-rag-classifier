@@ -11,14 +11,23 @@ One-slot guard: check_server_slots() stops a run unless llama-server reports exa
 dev override (HS_ALLOW_MULTISLOT=1 or the entry points' --allow-multislot) continues with a
 warning and the tag multislot_override; a test split refuses it (eval/runner.py
 check_test_guard), as it refuses tracing.
+
+LoRA adapters (off unless a config declares one): score_call and make_chat take an optional
+per-request lora list (llama-server's "lora" field, [{"id": 0, "scale": s}]); with none, the
+request has no "lora" field and is byte-identical to a build without adapters.
+check_server_adapters() runs next to the one-slot guard: a config's adapter block {"path",
+"sha256"} must match the file on disk and be the one adapter llama-server lists in
+/lora-adapters; with no block, the server must list none. Any mismatch stops the run.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
 import warnings
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -42,6 +51,10 @@ _allow_multislot = False
 
 class ServerSlotsError(RuntimeError):
     """llama-server does not have exactly one slot, or its slot count cannot be read."""
+
+
+class AdapterError(RuntimeError):
+    """llama-server's LoRA adapters, the config's adapter block and the file on disk disagree."""
 
 
 def allow_multislot(flag: bool = False) -> None:
@@ -87,9 +100,57 @@ def check_server_slots(base_url: str = BASE_URL,
     return {**tags, "multislot_override": "true"}
 
 
-def make_chat(client: dict[str, Any], base_url: str = BASE_URL):
+def lora_request(scale: float) -> list[dict[str, Any]]:
+    """The per-request "lora" field for the one declared adapter (llama-server id 0)."""
+    return [{"id": 0, "scale": float(scale)}]
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def check_server_adapters(base_url: str = BASE_URL, adapter: dict[str, str] | None = None,
+                          transport: httpx.BaseTransport | None = None) -> dict[str, str]:  # fmt: skip
+    """Stop unless the server's adapters match the config's block (module docstring); tags."""
+    where = f"llama-server at {base_url}"
+    try:
+        loras = ServerInfo(base_url, transport).lora_adapters()
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise AdapterError(f"cannot read /lora-adapters from {where} "
+                           f"({type(exc).__name__}: {exc})") from exc  # fmt: skip
+    listed = [str(x.get("path")) for x in loras]
+    if adapter is None:
+        if loras:
+            raise AdapterError(f"{where} has LoRA adapters the config does not declare: {listed}")
+        return {}
+    path = Path(adapter["path"]).expanduser()
+    if not path.is_file():
+        raise AdapterError(f"the config's adapter {path} is not a file")
+    got = _file_sha256(path)
+    if got != adapter["sha256"]:
+        raise AdapterError(f"{path} has SHA-256 {got}, the config declares {adapter['sha256']}")
+    if not loras:
+        raise AdapterError(f"the config declares the adapter {path}, but {where} lists none")
+    if len(loras) != 1 or Path(listed[0]).expanduser().resolve() != path.resolve():
+        raise AdapterError(f"{where} lists {listed}; the config declares exactly {path}")
+    return {"lora_adapter": path.name, "lora_adapter_sha256": got}
+
+
+def make_chat(client: dict[str, Any], base_url: str = BASE_URL,
+              lora: list[dict[str, Any]] | None = None):  # fmt: skip
+    """The chat client; lora (lora_request) is sent on every call when given, else not at all."""
     from langchain_openai import ChatOpenAI
 
+    extra_body: dict[str, Any] = {
+        "cache_prompt": CACHE_PROMPT,
+        "chat_template_kwargs": {"enable_thinking": client["enable_thinking"]},
+    }
+    if lora is not None:
+        extra_body["lora"] = lora
     return ChatOpenAI(
         base_url=f"{base_url}/v1",
         api_key="not-needed",  # llama-server takes no key; nothing secret here
@@ -98,10 +159,7 @@ def make_chat(client: dict[str, Any], base_url: str = BASE_URL):
         seed=client["seed"],
         timeout=client.get("timeout_s", 120),
         max_retries=client.get("max_retries", 2),
-        extra_body={
-            "cache_prompt": CACHE_PROMPT,
-            "chat_template_kwargs": {"enable_thinking": client["enable_thinking"]},
-        },
+        extra_body=extra_body,
     )
 
 
@@ -173,6 +231,14 @@ class ServerInfo:
         r.raise_for_status()
         return r.json()
 
+    def lora_adapters(self) -> list[dict]:
+        r = self.client.get("/lora-adapters")
+        r.raise_for_status()
+        out = r.json()
+        if not isinstance(out, list):
+            raise TypeError("/lora-adapters did not return a list")
+        return out
+
     def tokenize(self, text: str) -> list[int]:
         r = self.client.post("/tokenize", json={"content": text, "add_special": False})
         r.raise_for_status()
@@ -189,10 +255,11 @@ class ServerInfo:
 
 
 def score_call(http: httpx.Client, client: dict[str, Any], system: str, user: str,
-               top_logprobs: int, name: str = "score_call") -> dict:  # fmt: skip
+               top_logprobs: int, name: str = "score_call",
+               lora: list[dict[str, Any]] | None = None) -> dict:  # fmt: skip
     """A2 scoring: one generated token, no grammar or schema, with the top_logprobs most likely
     next tokens (log-probabilities before sampling). {"token", "top", "tokens_in", "tokens_out",
-    "seconds"}; top is [{"token", "logprob"}, ...]."""
+    "seconds"}; top is [{"token", "logprob"}, ...]. lora (lora_request): sent only when given."""
     body = {
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         "max_tokens": 1,
@@ -203,6 +270,8 @@ def score_call(http: httpx.Client, client: dict[str, Any], system: str, user: st
         "top_logprobs": top_logprobs,
         "chat_template_kwargs": {"enable_thinking": client["enable_thinking"]},
     }
+    if lora is not None:
+        body["lora"] = lora
     with tracing.llm_span(name, client.get("model", "qwen3.5-9b"), system, user) as call:
         t0 = time.perf_counter()
         r = http.post("/v1/chat/completions", json=body)
