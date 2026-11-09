@@ -1,0 +1,129 @@
+{
+  "version": 1,
+  "status": "fixed 9 Nov 2026 on val (step 2c Part A), before any test prediction was opened",
+  "target_accuracy_auto_accepted": 0.8,
+  "framing": "per-item threshold is the headline; the fixed review share (the headline cut's val share) is reported alongside",
+  "margin": {
+    "rule": "lower bound",
+    "percentile": 5.0,
+    "max_review_share": 0.8,
+    "definition": "for each candidate cut k (review the first k items of the order, k/n <= 0.80), apply the cut's per-item rule to each of the 1,000 cluster-bootstrap resamples (seed 20261021, as in step 2a) and take the accuracy of the auto-accepted rows; the headline cut is the smallest k whose 5th percentile (numpy linear) is >= 0.80 and stays >= 0.80 at every larger k up to 80% review"
+  },
+  "rule_forms": {
+    "a": "auto-accept when confidence >= t",
+    "b": "review when (cn8/HS6 differs from B1-ex's and confidence < t_d) or (agrees and confidence < t_a); t_a = 0 when the cut falls inside the disagreements, t_d = inf when it falls past them; 'inf' in this file means infinity"
+  },
+  "input": {
+    "run_id": "04fee43dcca547e59f7440fe989f0362",
+    "path": "/home/cal/data/hs-rag-classifier/mlflow/artifacts/eval-rulings/04fee43dcca547e59f7440fe989f0362/artifacts/predictions.parquet",
+    "sha256": "a453256706d3132e8404d62efa84e6df2ebec9539ee80d52b8adc274ab42010c",
+    "split": "val",
+    "config_hash": "5da7ac1452b3"
+  },
+  "bootstrap": {
+    "resamples": 1000,
+    "seed": 20261021,
+    "unit": "cluster_id"
+  },
+  "levels": {
+    "cn8": {
+      "confidence": "A4 joint confidence (the prediction's confidence at the refitted temperatures)",
+      "headline_order": "b",
+      "orders": {
+        "b": {
+          "lower_bound": {
+            "t_d": 0.8989088296797623,
+            "t_a": 0.0,
+            "k_reviewed": 323,
+            "review_share": 0.43066666666666664,
+            "n_accepted": 427,
+            "accuracy": 0.8313817330210773,
+            "ci_low": 0.7948671497584541,
+            "ci_high": 0.865256172219992,
+            "p5": 0.801820294148982
+          },
+          "first_share_condition_holds": null,
+          "fixed_share": 0.43066666666666664,
+          "point_2a": {
+            "t_d": 0.7219321464658647,
+            "t_a": 0.0,
+            "val_review_share": 0.32,
+            "val_accuracy": 0.8
+          }
+        },
+        "a": {
+          "lower_bound": {
+            "t": 0.7218384006283393,
+            "k_reviewed": 319,
+            "review_share": 0.42533333333333334,
+            "n_accepted": 431,
+            "accuracy": 0.8306264501160093,
+            "ci_low": 0.7961569519894289,
+            "ci_high": 0.866527525499511,
+            "p5": 0.8013760234885452
+          },
+          "first_share_condition_holds": null,
+          "fixed_share": 0.42533333333333334,
+          "point_2a": {
+            "t": 0.6436310363251655,
+            "val_review_share": 0.3453333333333333,
+            "val_accuracy": 0.8004073319755601
+          }
+        }
+      }
+    },
+    "hs6": {
+      "confidence": "A4 stage-1 probability of the top-1 HS6 at the frozen T1 = 1.2555214195707303 (eval.metrics_hs6)",
+      "headline_order": "a",
+      "orders": {
+        "b": {
+          "lower_bound": {
+            "t_d": 0.799334037009087,
+            "t_a": 0.0,
+            "k_reviewed": 218,
+            "review_share": 0.2906666666666667,
+            "n_accepted": 532,
+            "accuracy": 0.8289473684210527,
+            "ci_low": 0.7967017590618336,
+            "ci_high": 0.862135647891232,
+            "p5": 0.8015095327128547
+          },
+          "first_share_condition_holds": {
+            "t_d": 0.793093835478789,
+            "t_a": 0.0,
+            "review_share": 0.2866666666666667,
+            "p5": 0.8
+          },
+          "fixed_share": 0.2906666666666667,
+          "point_2a": null
+        },
+        "a": {
+          "lower_bound": {
+            "t": 0.6476451369571951,
+            "k_reviewed": 208,
+            "review_share": 0.2773333333333333,
+            "n_accepted": 542,
+            "accuracy": 0.8265682656826568,
+            "ci_low": 0.7949593310426286,
+            "ci_high": 0.858456749445061,
+            "p5": 0.800379873446456
+          },
+          "first_share_condition_holds": null,
+          "fixed_share": 0.2773333333333333,
+          "point_2a": {
+            "t": 0.5593106629179073,
+            "val_review_share": 0.196,
+            "val_accuracy": 0.8009950248756219
+          }
+        }
+      },
+      "t1": 1.2555214195707303
+    }
+  },
+  "sets": {
+    "rulings": "cn8",
+    "atoz": "cn8",
+    "hscodecomp_c": "hs6 (headline input)",
+    "hscodecomp_a": "hs6 (alongside)"
+  }
+}

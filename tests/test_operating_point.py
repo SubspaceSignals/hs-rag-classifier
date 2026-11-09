@@ -4,6 +4,7 @@ per-item form and its exactness, the fixed-share table and stability. No model, 
 import math
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from hs_rag_classifier.analysis import a3_agreement as AG
@@ -89,3 +90,108 @@ def test_share_table_and_stability_shapes():
         0 <= row["rule_share_at_or_above_target"] <= 1
         and row["need_share_low"] <= row["need_share_high"]
     )
+
+
+# --- step 2c ------------------------------------------------------------------------------
+
+
+def synthetic(n=600, seed=3):
+    rng = np.random.default_rng(seed)
+    conf = rng.uniform(0.05, 0.99, n)
+    corr = (rng.uniform(size=n) < np.minimum(1.0, conf + 0.3)).astype(float)
+    agree = rng.uniform(size=n) < 0.5
+    ids = [str(i) for i in range(1, n + 1)]
+    return O.arrays(conf, corr, agree, ids), ids
+
+
+def test_select_cut_needs_every_larger_share():
+    assert O.select_cut([False, True, False, True, True]) == (1, 3)  # first 1, headline 3
+    assert O.select_cut([False, False, True, True]) == (2, 2)
+    assert O.select_cut([True, False]) == (0, None)  # fails at the last share: no headline
+    assert O.select_cut([False, False]) == (None, None)
+
+
+def test_resamples_are_the_harness_resamples():
+    from hs_rag_classifier.eval import metrics as M
+
+    clusters = ["c1", "c1", "c2", "c3", "c3", "c3", "c4"]
+    vals = np.arange(7, dtype=float)
+    want = M.bootstrap_samples(pd.DataFrame({"cluster_id": clusters, "v": vals}),
+                               {"s": lambda x: float(x["v"].sum())}, 50, 11)["s"]  # fmt: skip
+    got = [vals[i].sum() for i in O.resample_indices(clusters, 50, 11)]
+    assert np.array_equal(want, got)
+
+
+def test_lower_bound_cut_on_synthetic_data():
+    a, ids = synthetic()
+    for pol in ("a", "b"):
+        res = O.lower_bound_cut(pol, a, ids, target=0.8, n_resamples=200)
+        h = res["headline"]
+        assert h is not None and 0 <= h["review_share"] <= 0.8
+        curve = res["curve"]
+        assert curve.loc[curve["k"] >= h["k_reviewed"], "ok"].all()
+        assert h["p5"] >= 0.8 and h["accuracy"] >= h["p5"]
+        # the point rule (no margin) never needs more review than the lower-bound cut
+        assert O.target_rule(pol, a, 0.8)["k_reviewed"] <= h["k_reviewed"]
+        rule = {k: h[k] for k in (("t",) if pol == "a" else ("t_d", "t_a"))}
+        assert O.apply_rule(pol, rule, a).sum() == h["k_reviewed"]  # the per-item rule is the cut
+
+
+def test_rule_file_sha_check(tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    (repo / "configs").mkdir(parents=True)
+    f = repo / "configs" / "operating_point_rule.json"
+    f.write_text('{"x": 1}\n')
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    git("init", "-q")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "add", ".")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "rule")
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True,
+                          text=True, check=True).stdout.strip()  # fmt: skip
+    assert len(O.check_rule_file(f, head, repo)) == 64
+    f.write_text('{"x": 2}\n')  # edited after the commit
+    with pytest.raises(O.RuleFileError, match="differs"):
+        O.check_rule_file(f, head, repo)
+    with pytest.raises(O.RuleFileError, match="not in commit"):
+        O.check_rule_file(f, "0" * 40, repo)
+
+
+def test_apply_one_rules_and_drift():
+    a, ids = synthetic(n=200, seed=5)
+    spec = {"thresholds": {"t": 0.6}, "val_review_share": 0.4}
+    r = O.apply_one("a", "lower_bound", spec, a, ids, n_resamples=50)
+    rev = a["confidence"] < 0.6
+    assert r["n_reviewed"] == int(rev.sum()) and r["review_share"] == pytest.approx(rev.mean())
+    assert r["accuracy"] == pytest.approx(a["correct"][~rev].mean())
+    assert r["drift_review_share"] == pytest.approx(rev.mean() - 0.4)
+    assert (
+        r["target_point_holds"] == (r["accuracy"] >= 0.8)
+        and r["ci_low"] <= r["accuracy"] <= r["ci_high"]
+    )
+    b = O.apply_one("b", "lower_bound", {"thresholds": {"t_d": math.inf, "t_a": 0.3}, "val_review_share": 0.5},
+                    a, ids, n_resamples=20)  # fmt: skip
+    dis = ~a["agree_cn8"]
+    assert b["n_reviewed"] == int((dis | (a["confidence"] < 0.3)).sum())
+    fs = O.apply_one(
+        "b", "fixed_share", {"share": 0.25, "val_review_share": 0.25}, a, ids, n_resamples=20
+    )
+    assert fs["n_reviewed"] == 50 and fs["drift_review_share"] == 0
+    hs = O.hindsight("a", a)
+    assert hs is None or 0 <= hs <= 1
+
+
+def test_rules_for_reads_the_file_form():
+    rule = {"levels": {"cn8": {"orders": {"b": {"lower_bound": {"t_d": "inf", "t_a": 0.41, "review_share": 0.5},
+                                                "point_2a": {"t_d": 0.72, "t_a": 0.0, "val_review_share": 0.32},
+                                                "fixed_share": 0.5}}}}}  # fmt: skip
+    r = O.rules_for(rule, "cn8", "b")
+    assert (
+        math.isinf(r["lower_bound"]["thresholds"]["t_d"])
+        and r["point_2a"]["thresholds"]["t_d"] == 0.72
+    )
+    assert r["fixed_share"] == {"share": 0.5, "val_review_share": 0.5}
