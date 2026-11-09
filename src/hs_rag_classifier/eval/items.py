@@ -8,6 +8,7 @@ against that file, so every run is tied to the exact set:
     rulings  splits/rulings_v1/{val,test}_refs.txt  (member references of each group)
     atoz     splits/atoz_v1/test_refs.txt           (member ids of each term)
     hand     the CSV itself (no frozen ref file yet)
+    hscodecomp_c, hscodecomp_a  the pinned JSONL itself (data/hscodecomp.py, SHA-256 checked)
 
 Inputs and labels:
     rulings  text = description; with_keywords appends "Keywords: ..." (ablation only).
@@ -16,6 +17,9 @@ Inputs and labels:
              is its own cluster.
     hand     text = description; label = code10 when given, else cn8; each row its own
              cluster. An empty CSV loads as 0 items.
+    hscodecomp_c / hscodecomp_a  (test only; data/hscodecomp.py) text = title, category path
+             and filtered attributes (c, the headline) or the title alone (a); label = HS6
+             (label_depth 6; US digits 7-10 are cut at load); each item its own cluster.
 """
 
 from __future__ import annotations
@@ -29,13 +33,15 @@ from pydantic import BaseModel, Field
 
 from hs_rag_classifier.data import atoz as atoz_data
 from hs_rag_classifier.data import hand as hand_data
+from hs_rag_classifier.data import hscodecomp as hscodecomp_data
 from hs_rag_classifier.data import rulings as rulings_data
 
 DATA_ROOT = Path.home() / "data" / "hs-rag-classifier"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SPLITS_DIR = REPO_ROOT / "splits"
-DATASETS = ("rulings", "atoz", "hand")
-TEST_ONLY = ("atoz", "hand")
+DATASETS = ("rulings", "atoz", "hand", *hscodecomp_data.DATASET_NAMES)
+TEST_ONLY = ("atoz", "hand", *hscodecomp_data.DATASET_NAMES)
+HS6_DATASETS = hscodecomp_data.DATASET_NAMES  # labels at HS6 only; scored at depth 6
 
 RULINGS_COLUMNS = ["ref", "member_refs", "description", "keywords", "code10", "cn8", "chapter",
                    "cluster_id", "label_depth"]  # fmt: skip
@@ -45,8 +51,8 @@ ATOZ_COLUMNS = ["id", "member_ids", "title", "cn8", "code10", "label_depth"]
 class EvalItem(BaseModel):
     item_id: str
     text: str
-    label_code: str = Field(pattern=r"^(\d{8}|\d{10})$")
-    label_depth: Literal[8, 10]
+    label_code: str = Field(pattern=r"^(\d{6}|\d{8}|\d{10})$")
+    label_depth: Literal[6, 8, 10]
     cluster_id: str
     chapter: str
     dataset: str
@@ -169,6 +175,27 @@ def load_hand(path: Path = hand_data.DEFAULT_CSV) -> EvalSet:
     )
 
 
+def load_hscodecomp(variant: str, root: Path = DATA_ROOT,
+                    config: Path = hscodecomp_data.INPUTS_CONFIG,
+                    config_sha256: str = hscodecomp_data.INPUTS_CONFIG_SHA256) -> EvalSet:  # fmt: skip
+    """HSCodeComp with input c or a; labels at HS6 (rules in data/hscodecomp.py)."""
+    if variant not in hscodecomp_data.BUILDERS:
+        raise ValueError(f"unknown HSCodeComp input {variant!r}")
+    cfg = hscodecomp_data.load_config(config, config_sha256)
+    ds = cfg["dataset"]
+    path = hscodecomp_data.data_path(root, cfg)
+    records = hscodecomp_data.read_records(path, ds["sha256"], ds["n_items"])
+    build = hscodecomp_data.BUILDERS[variant]
+    name = f"hscodecomp_{variant}"
+    items = [
+        EvalItem(item_id=r.task_id, text=build(r, cfg), label_code=r.hs6, label_depth=6,
+                 cluster_id=r.task_id, chapter=r.hs6[:2], dataset=name, split="test")
+        for r in records
+    ]  # fmt: skip
+    return EvalSet(dataset=name, split="test", items=items, split_file=ds["path"],
+                   split_sha256=ds["sha256"])  # fmt: skip
+
+
 def load(
     dataset: str,
     split: str,
@@ -177,7 +204,7 @@ def load(
     splits_dir: Path = SPLITS_DIR,
     hand_csv: Path | None = None,
 ) -> EvalSet:
-    """The named dataset and split; A to Z and hand have a test split only."""
+    """The named dataset and split; A to Z, hand and HSCodeComp have a test split only."""
     if with_keywords and dataset != "rulings":
         raise ValueError("--with-keywords applies to rulings only")
     if dataset in TEST_ONLY and split != "test":
@@ -188,4 +215,6 @@ def load(
         return load_atoz(root, splits_dir)
     if dataset == "hand":
         return load_hand(hand_csv or root / "hand" / "hand_v1.csv")
+    if dataset in hscodecomp_data.DATASET_NAMES:
+        return load_hscodecomp(dataset.removeprefix("hscodecomp_"), root)
     raise ValueError(f"unknown dataset {dataset!r}; choose from {', '.join(DATASETS)}")

@@ -23,6 +23,12 @@ flat MLflow metrics logged next to the harness's. Arms without it are unchanged.
 also set run_params (a dict of extra MLflow params, e.g. A4's candidate and adapter SHA-256),
 logged with the harness's params on a new run; arms without it log exactly the same params.
 
+HS6 sets (eval.items.HS6_DATASETS, HSCodeComp): labels are 6 digits, so every frame and
+harness metric is computed at depth min(6, max_depth), and eval.metrics_hs6 adds the HS6
+metrics (confidence, top-3, ECE, review orders a, b and length) under "hs6" in metrics.json,
+flat MLflow metrics prefixed hs6_ and per-item columns prefixed hs6_. Arm after_scoring hooks
+assume cn8 labels (A3's review queue) and are not called on an HS6 set.
+
 Resumable runs: predictions are appended to ~/data/hs-rag-classifier/eval/partial/<run_id>.jsonl
 after each predict call (with their latency), so a run that stops part-way keeps its finished
 items. resume=<run_id> reopens that MLflow run and predicts only the items not yet in the file.
@@ -45,13 +51,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from hs_rag_classifier import tracing
 from hs_rag_classifier.data.rulings import NOMENCLATURE_VERSION
 from hs_rag_classifier.eval import metrics as M
 from hs_rag_classifier.eval.arms import Arm, OracleArm, Prediction, RandomArm, config_hash
-from hs_rag_classifier.eval.items import DATA_ROOT, REPO_ROOT, EvalSet
+from hs_rag_classifier.eval.items import DATA_ROOT, HS6_DATASETS, REPO_ROOT, EvalSet
 from hs_rag_classifier.eval.plots import coverage_plot, reliability_plot
 from hs_rag_classifier.pipeline import llm
 
@@ -336,6 +343,9 @@ def run_eval(
     exp_id = _experiment_id(experiment, mlflow_dir / "artifacts")
     chash = config_hash(arm.config)
     max_depth = int(getattr(arm, "max_depth", M.FULL_DEPTH))
+    hs6 = evalset.dataset in HS6_DATASETS
+    if hs6:
+        max_depth = min(max_depth, 6)
     if resume is not None:
         check_resume(mlflow.get_run(resume), arm, evalset, chash, git, limit)
         start = {"run_id": resume}
@@ -406,13 +416,27 @@ def run_eval(
         frame = M.score(items, preds, valid8, valid10, latencies, max_depth)
         metrics = M.compute_metrics(frame, total, review_rate, n_resamples, max_depth=max_depth)
         hook = getattr(arm, "after_scoring", None)  # optional set-level outputs (e.g. A3)
-        extra = hook(frame, n_resamples, M.BOOTSTRAP_SEED) if hook is not None else None
+        extra = hook(frame, n_resamples, M.BOOTSTRAP_SEED) if hook is not None and not hs6 else None
         if extra is not None:
             frame = extra["frame"]
             metrics["arm_metrics"] = extra["metrics"]
+        if hs6:
+            from hs_rag_classifier.eval import metrics_hs6 as MH  # imports a3_agreement
+
+            t1 = MH.stage1_temperature(arm)
+            f6 = MH.score(items, preds, valid8, valid10, t1)
+            metrics["hs6"] = MH.compute(f6, n_resamples, M.BOOTSTRAP_SEED,
+                                        "stage1" if t1 is not None else "native")  # fmt: skip
+            metrics["hs6"]["speed"] = MH.speed([MH.details_of(p) for p in preds],
+                                               np.asarray(latencies, float))  # fmt: skip
+            keep = [c for c in f6.columns if c not in ("item_id", "cluster_id", "chapter", "top1")]
+            frame = frame.merge(f6[["item_id", *keep]].rename(columns={c: f"hs6_{c}" for c in keep}),
+                                on="item_id", how="left")  # fmt: skip
         mlflow.log_metrics(flat_metrics(metrics))
         if extra is not None:
             mlflow.log_metrics(extra["flat"])
+        if hs6:
+            mlflow.log_metrics(MH.flat(metrics["hs6"]))
         label = f"{arm.name}, {evalset.dataset} {evalset.split}"
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)
@@ -469,6 +493,16 @@ def summary_lines(result: dict, arm: Arm, evalset: EvalSet) -> list[str]:
 
 def arm_summary_lines(result: dict) -> list[str]:
     """Extra summary lines for an arm with after_scoring (A3); none for other arms."""
+    h6 = result["metrics"].get("hs6")
+    if h6:
+        ci, o = h6["intervals"], h6["orders"]
+        line = (f"  HS6: top-1 {_fmt(h6['top1'][6])} [{_fmt(ci['top1_6']['low'])}, "
+                f"{_fmt(ci['top1_6']['high'])}], HS4 {_fmt(h6['top1'][4])}, HS2 "
+                f"{_fmt(h6['top1'][2])}; top-3 {_fmt(h6['recall_3'])}; ECE {_fmt(h6['ece'])} "
+                f"({h6['confidence_mode']} confidence)")  # fmt: skip
+        rev = "; ".join(f"({k}) {_fmt(v['accuracy_at_review']['0.20'])} AUROC {_fmt(v['auroc'])}"
+                        for k, v in o.items())  # fmt: skip
+        return [line, f"  HS6 accuracy at 20% review, headline (a): {rev}"]
     am = result["metrics"].get("arm_metrics")
     if not am or "headline_policy_b" not in am:
         return []

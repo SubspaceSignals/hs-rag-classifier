@@ -5,6 +5,10 @@ retrieval. Their raw and processed files live in their own folders under the dat
 builder that walks a broader folder (raw/, processed/, the data root) could still pick them up
 without naming them. Any builder that collects input files by globbing or walking folders must
 pass its list through check_retrieval_inputs(); tests/test_atoz.py enforces that statically.
+
+HSCodeComp (data/hscodecomp.py) is an external test set only, kept the same way: its folder
+under the data root is forbidden here, and tests/test_hscodecomp.py enforces the same static
+rule for it.
 """
 
 from __future__ import annotations
@@ -13,7 +17,9 @@ from collections.abc import Iterable
 from pathlib import Path
 
 # Folders under the data root that hold test-only data, never retrieval or training input.
-FORBIDDEN_DIRS = ("raw/atoz", "processed/atoz")
+ATOZ_DIRS = ("raw/atoz", "processed/atoz")
+HSCODECOMP_DIRS = ("hscodecomp",)
+FORBIDDEN_DIRS = (*ATOZ_DIRS, *HSCODECOMP_DIRS)
 
 
 class ForbiddenInputError(RuntimeError):
