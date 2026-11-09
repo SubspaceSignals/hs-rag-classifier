@@ -1,0 +1,82 @@
+{
+  "rule": "phase 4 out-of-distribution flag",
+  "signal": "cosine similarity (dot product of normalised bge-m3 vectors) between the A4 retriever's query text (pipeline.checks.input_check(text, max_input_chars)['description'], profile off) and its nearest row in the dense rulings index the frozen A4 pipeline uses (shared with B1-ex); one text per encode call; flag when similarity < threshold",
+  "flag": "similarity < threshold",
+  "action": "flagged items are forced to review",
+  "reason": "input is unlike the rulings the confidence was fitted on",
+  "threshold": 0.63819819688797,
+  "percentile": 5.0,
+  "method": "linear",
+  "val_flag_rate": 0.050666666666666665,
+  "n_flagged_val": 38,
+  "index": {
+    "path": "indexes/b1ex/bge-m3/af8a51424108/embeddings.npy",
+    "root": "data",
+    "sha256": "bee9af0d8f0a0eca14a3ba837e670c447ddfa902f96ba4b0e4d40381655bcb9f",
+    "meta": {
+      "path": "indexes/b1ex/bge-m3/af8a51424108/meta.json",
+      "root": "data",
+      "sha256": "4a8c26e4729ee8a2a66ba8f928fd8a5ef36b814891c37b0dcdc4e5d20cd47f01"
+    },
+    "rows": 3773,
+    "dim": 1024,
+    "built_from": {
+      "path": "processed/rulings/v1/train.parquet",
+      "root": "data",
+      "sha256": "c35310a143229486a4ee2716f40b43e13093535ac3b032a22153c27c5010a287"
+    },
+    "config": {
+      "path": "configs/b1ex_embed.json",
+      "root": "repo",
+      "sha256": "75e3cf9410741ee7c7ef45037ddf31ccd58a09fb667d5dfca26f13d956d6d10f"
+    },
+    "shared_by": [
+      "A4 retriever dense rulings source",
+      "B1-ex"
+    ]
+  },
+  "embedder": {
+    "model": "bge-m3",
+    "hf_id": "BAAI/bge-m3",
+    "revision": "5617a9f61b028005a4858fdac845db406aefb181",
+    "dtype": "float16",
+    "max_length": 512,
+    "query_instruction": "",
+    "normalise": true,
+    "batch_size": 1
+  },
+  "query_text": {
+    "transform": "pipeline.checks.input_check(text, max_input_chars)['description']",
+    "max_input_chars": 1000,
+    "profile": false
+  },
+  "val_input": {
+    "path": "processed/rulings/v1/val.parquet",
+    "root": "data",
+    "sha256": "58d7b5709e9a21ba666a628a268b823cdc8ba0bb6c4d9e95e3ba1e101842bef5",
+    "split_file": {
+      "path": "splits/rulings_v1/val_refs.txt",
+      "root": "repo",
+      "sha256": "e2c809e78c3654d47f7b0ffea5d805ec22f283746da1cc15d8140548d830ecb0"
+    },
+    "n": 750
+  },
+  "self_exclusion": {
+    "applies_to": "fit only (serving and the report-only test application use the full index)",
+    "rule": "mask every train ruling (with its member refs) sharing the val item's build_set.near_dup_key: first 300 input_check characters plus cn8",
+    "excluded_pairs": [
+      {
+        "val_ref": "600015293",
+        "train_refs": [
+          "600015294"
+        ]
+      }
+    ]
+  },
+  "sensitivity_without_exclusion": {
+    "label": "sensitivity only, not the rule",
+    "threshold": 0.63819819688797,
+    "val_flag_rate": 0.050666666666666665
+  },
+  "fitted_on": "rulings val only; no A to Z, HSCodeComp or test data"
+}
