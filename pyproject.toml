@@ -56,6 +56,13 @@ finetune = [
     "bitsandbytes==0.50.2",
     "accelerate==1.15.0",
 ]
+# Local API (src/hs_rag_classifier/service, with llm and ml): exact pins at the versions MLflow
+# already locks, so no locked package moves. httpx backs FastAPI's TestClient.
+serve = [
+    "fastapi==0.158.1",
+    "httpx==0.28.1",
+    "uvicorn==0.54.0",
+]
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128" }]
