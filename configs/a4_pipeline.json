@@ -1,0 +1,98 @@
+{
+  "arm": "a4",
+  "display_name": "A4 QLoRA adapter on A3",
+  "status": "frozen",
+  "base_config": {
+    "path": "configs/a3_pipeline.json",
+    "sha256": "74f4e39197e4a35ddeee8bc60e94ee54fd804d0eeeab8df8b5e74fb334c7d58b"
+  },
+  "inherits": "everything in configs/a3_pipeline.json (retrieval, B1-ex locked config k = 1 from train rulings only, order-averaging on both stages, review policy (b), prompts, server flags); A4 changes only the fields below",
+  "adapter": {
+    "root": "data (~/data/hs-rag-classifier)",
+    "path": "finetune/a4/runs/a4_full/gguf/final/a4_full_final.gguf",
+    "sha256": "dea88b27ab881e47f3a18cf9166cfb5a7fdb948f3dc015a952db29a4df94349f",
+    "size_bytes": 160460288,
+    "candidate": "final",
+    "step": 745,
+    "guard": "the file's SHA-256 must match and it must be the one adapter llama-server lists in /lora-adapters (pipeline/llm.py check_server_adapters)"
+  },
+  "base_model": {
+    "hf_repo": "unsloth/Qwen3.5-9B-GGUF",
+    "quantisation": "UD-Q4_K_XL",
+    "model_file": "Qwen3.5-9B-UD-Q4_K_XL.gguf",
+    "model_snapshot": "3885219b6810b007914f3a7950a8d1b469d598a5",
+    "path": "~/.cache/huggingface/hub/models--unsloth--Qwen3.5-9B-GGUF/snapshots/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-UD-Q4_K_XL.gguf",
+    "sha256": "6f5d30666c2d8ae16a306e616d95341dcf3cc46810df84d7e6f5a7d1e4c1b293"
+  },
+  "training": {
+    "run": "finetune/a4/runs/a4_full",
+    "manifest": {
+      "path": "finetune/a4/manifest.json",
+      "sha256": "b0beda4f5a78d0a7bc1fd3a3069c817ac9353dfbc5aec4c70363d8fce9067488"
+    },
+    "train_examples_sha256": "be7f0666d8530d4682a08d17a12626b93578789acdc8c8e2d11c004a3a0603f8",
+    "builder_commit": "48f28985196db6ab2b7a50f83131354e7d1a0c99",
+    "trainer_commit": "a4049ad81e978ee339ebc574dd1eb62a6107330d",
+    "step5_commit": "3d021e0e37e78670d593afbf4b66c5d26fe7aa62",
+    "mlflow_training_run": "501916309030450cbb4741b6a89ce927"
+  },
+  "temperature": {
+    "mode": "per_stage",
+    "stage1": 1.2555214195707303,
+    "stage2": 1.2685136415808747,
+    "fitted_on": "rulings val run 989451b314d34a0fb7fbf00db073e484 (750 items), per-stage NLL of the true option; fitted and evaluated on the same items",
+    "source": {
+      "path": "eval/a4/a4_final_refit_val.json",
+      "sha256": "9b0e9143d7274e1049f00827e9b68a63db38422b098740db2c92a19934188e3f"
+    }
+  },
+  "lora_scales": {
+    "scoring": 1.0,
+    "rationale": 0.0
+  },
+  "server": {
+    "command": "~/llama.cpp/build/bin/llama-server -hf unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL -ngl 99 -c 16384 --port 8080 --jinja --cache-ram 0 -np 1 --offline --lora ~/data/hs-rag-classifier/finetune/a4/runs/a4_full/gguf/final/a4_full_final.gguf",
+    "change_from_a3": "--offline --lora <final GGUF> only; -np 1 and cache_prompt=false as for every locked A2/A3 run"
+  },
+  "review_policy": {
+    "name": "b",
+    "status": "frozen",
+    "rule": "review first every item whose A2 top-1 cn8 differs from the B1-ex top-1 cn8, then the items where they agree; within each group lowest A2 joint confidence first; ties by item id (numeric order)",
+    "reported_only": [
+      "a"
+    ]
+  },
+  "rationale": "on, as in A3, at LoRA scale 0 (base model); post-hoc, never changes the choice",
+  "expected_val": {
+    "source": {
+      "path": "eval/a4/a4_final_refit_val.json",
+      "sha256": "9b0e9143d7274e1049f00827e9b68a63db38422b098740db2c92a19934188e3f",
+      "run": "989451b314d34a0fb7fbf00db073e484"
+    },
+    "dataset": "rulings",
+    "split": "val",
+    "n_items": 750,
+    "cn8_top1": 0.672,
+    "hs6_top1": 0.7146666666666667,
+    "top3_8": 0.816,
+    "ece": 0.08449977554351339,
+    "val_nll": {
+      "stage1": 459.27493324682365,
+      "stage2": 121.76768849700326,
+      "joint": 581.0426217438269
+    },
+    "policy_b": {
+      "accuracy_at_review": {
+        "0.10": 0.7303703703703703,
+        "0.20": 0.7583333333333333,
+        "0.30": 0.7923809523809524,
+        "0.40": 0.8244444444444444,
+        "0.50": 0.8373333333333334
+      },
+      "aurc": 0.14701634471858638,
+      "auroc": 0.7887630662020906,
+      "review_rate_for_80": 0.32
+    },
+    "agree_rate_b1ex": 0.48533333333333334
+  }
+}

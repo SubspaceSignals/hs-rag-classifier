@@ -147,6 +147,12 @@ def _a4_candidate(valid8: set[str], adapter=None, adapter_sha256=None, candidate
     return A4.A4CandidateArm(A4.load_config(adapter, adapter_sha256, candidate))
 
 
+def _a4(valid8: set[str]) -> Arm:
+    from hs_rag_classifier.arms.a4 import A4Arm
+
+    return A4Arm()
+
+
 def _a2_order_avg(valid8: set[str]) -> Arm:
     from hs_rag_classifier.arms.a2_pipeline import A2OrderAvgArm
 
@@ -166,6 +172,7 @@ ARMS = {
     "a2_order_avg": _a2_order_avg,
     "a3": _a3,
     "a4_candidate": _a4_candidate,
+    "a4": _a4,
 }
 ARM_OPTIONS = {"a4_candidate": ("adapter", "adapter_sha256", "candidate")}
 
