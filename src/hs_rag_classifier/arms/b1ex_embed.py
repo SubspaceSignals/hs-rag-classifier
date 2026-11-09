@@ -41,6 +41,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from hs_rag_classifier import paths as P
 from hs_rag_classifier.arms import embed as E
 from hs_rag_classifier.arms.b0_bm25 import CANDIDATE_CAP, SOFTMAX_TOP, softmax_top1
 from hs_rag_classifier.data import rulings as rulings_data
@@ -147,7 +148,7 @@ def build_index(
     (train_path,) = check_retrieval_inputs([train_path], root)
     rows = pd.read_parquet(train_path, columns=TRAIN_COLUMNS).reset_index(drop=True)
     key = index_key(config, sha256(train_path))
-    meta = {"config": {k: config[k] for k in INDEX_KEYS}, "train_path": str(train_path),
+    meta = {"config": {k: config[k] for k in INDEX_KEYS}, "train_path": P.record(train_path, root),
             "refs": list(rows["ref"])}  # fmt: skip
     cache_dir = root / INDEX_DIR / config["model"] / key
     emb, meta = E.cached_embeddings(cache_dir, list(rows["description"]), encoder, meta, cache)

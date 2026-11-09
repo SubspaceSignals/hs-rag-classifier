@@ -59,6 +59,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from hs_rag_classifier import paths as P
 from hs_rag_classifier.eval import metrics as M
 from hs_rag_classifier.eval import runner as R
 from hs_rag_classifier.eval.items import DATA_ROOT, sha256_file
@@ -506,7 +507,7 @@ def old_run(f: pd.DataFrame, temps: dict, run_id: str = OLD_A2_RUN) -> dict[str,
     rates = (0.20, 0.50)
     res = {
         "run_id": run_id,
-        "path": str(path),
+        **P.record(path),
         "sha256": sha256_file(path),
         "top1_changes": int((g["a2_top1"] != f["a2_top1"]).sum()),
         "agreement_old": agreement_stats(g),
@@ -1383,7 +1384,7 @@ def run(
             "val_split": {"file": evalset.split_file, "sha256": evalset.split_sha256},
             "temperatures": {"stage1": temps["stage1"], "stage2": temps["stage2"]},
             "saved_b1ex_check": saved_b1ex_check(f),
-            "earlier_report": str(DATA_ROOT / "eval" / "a2_val_report.json"),
+            "earlier_report": P.record(DATA_ROOT / "eval" / "a2_val_report.json"),
         },
         "b1ex_config": b1_config,
         "b1ex_top1_8": float(f["b1ex_correct"].mean()),

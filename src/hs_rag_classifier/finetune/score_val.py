@@ -30,6 +30,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from hs_rag_classifier import paths as P
 from hs_rag_classifier.finetune.build_set import OUT, TOKENIZER_DIR, sha256_file
 
 VAL_FILE = "val_subset.parquet"
@@ -170,7 +171,7 @@ def compare(base_path: Path, adapter_path: Path) -> dict:
         "gate": res,
         "base": summarise(b),
         "adapter": summarise(a),
-        "inputs": {"base": str(base_path), "adapter": str(adapter_path)},
+        "inputs": {"base": P.record(base_path), "adapter": P.record(adapter_path)},
     }
 
 

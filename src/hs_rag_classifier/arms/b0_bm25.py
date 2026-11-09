@@ -42,6 +42,7 @@ import numpy as np
 import pandas as pd
 import Stemmer
 
+from hs_rag_classifier import paths as P
 from hs_rag_classifier.data.nomenclature import current_lines, sha256
 from hs_rag_classifier.data.rulings import NOMENCLATURE_VERSION
 from hs_rag_classifier.eval.arms import Candidate, Prediction, config_hash
@@ -175,7 +176,11 @@ def build_index(
         cache_dir.mkdir(parents=True, exist_ok=True)
         retriever.save(str(cache_dir), show_progress=False)
         (cache_dir / "code10.json").write_text(json.dumps(list(docs["code10"])), encoding="utf-8")
-        meta = {"config": config, "codes_path": str(codes_path), "n_documents": len(docs)}
+        meta = {
+            "config": config,
+            "codes_path": P.record(codes_path, root),
+            "n_documents": len(docs),
+        }
         (cache_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return B0Index(retriever, list(docs["code10"]))
 

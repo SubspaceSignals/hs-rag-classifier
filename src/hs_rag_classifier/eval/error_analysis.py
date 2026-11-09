@@ -44,6 +44,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from hs_rag_classifier import paths as P
 from hs_rag_classifier.eval import metrics as M
 from hs_rag_classifier.eval.items import DATA_ROOT, sha256_file
 
@@ -376,7 +377,7 @@ def run(out: Path = OUT, log_mlflow: bool = True) -> dict[str, Any]:
     runs = find_runs(R.TEST_LOG)
     descriptions, paths, nom_path = nomenclature()
     summary: dict[str, Any] = {"test_runs_jsonl_sha256": test_log_sha, "nomenclature": {
-        "path": str(nom_path), "sha256": sha256_file(nom_path)}, "inputs": {}, "sets": {},
+        **P.record(nom_path), "sha256": sha256_file(nom_path)}, "inputs": {}, "sets": {},
         "rules": {"types": list(TYPES),
                   "other": ("codes8.parquet description of the cn8 (its own line, or the nearest "
                             "parent line when node_above_cn8) starts with 'Other' after stripping "
@@ -388,7 +389,7 @@ def run(out: Path = OUT, log_mlflow: bool = True) -> dict[str, Any]:
         for arm in ARMS:
             n, rid = runs[(ds, arm)]
             p = predictions_path(rid)
-            summary["inputs"][f"{ds}_{arm}"] = {"test_run": n, "mlflow_run_id": rid, "path": str(p),
+            summary["inputs"][f"{ds}_{arm}"] = {"test_run": n, "mlflow_run_id": rid, **P.record(p),
                                                 "sha256": sha256_file(p)}  # fmt: skip
             frames[arm] = pd.read_parquet(p)
         res = analyse(frames["a3"], frames["a4"], descriptions)

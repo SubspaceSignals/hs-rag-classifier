@@ -7,6 +7,11 @@ Models (sentence-transformers, dense vectors only, pinned to a Hugging Face comm
 Both run in fp16 on the GPU with a max sequence length of 512 tokens. Embeddings are
 L2-normalised, so similarity is the dot product (cosine).
 
+One model copy per process: Encoder's default backend comes from shared_backend(), which loads
+each (model, revision, dtype, max length, batch) once and hands the same encode callable to
+every Encoder that asks (the hybrid retriever and B1-ex in A3/A4 used to load one each). The
+loader and encode call are unchanged, so embeddings are bit-identical to a private copy.
+
 torch and sentence-transformers sit in the "ml" dependency group and are imported only when a
 real model is loaded; the rest of this module (and every arm's ranking code) imports without
 them. Tests pass a fake backend: any callable from a list of texts to an (n, dim) array.
@@ -104,13 +109,31 @@ def sentence_transformer_backend(config: dict[str, Any], batch_size: int = ENCOD
     return encode
 
 
+_SHARED: dict[tuple, Backend] = {}
+
+
+def backend_key(config: dict[str, Any], batch_size: int = ENCODE_BATCH) -> tuple:
+    """What makes two loaded backends the same: model files, dtype, max length, batch."""
+    return (config["hf_id"], config["revision"], config["dtype"], int(config["max_length"]),
+            int(batch_size))  # fmt: skip
+
+
+def shared_backend(config: dict[str, Any], batch_size: int = ENCODE_BATCH,
+                   loader: Callable[..., Backend] | None = None) -> Backend:  # fmt: skip
+    """The process's one backend for this model and settings, loaded on first use."""
+    key = backend_key(config, batch_size)
+    if key not in _SHARED:
+        _SHARED[key] = (loader or sentence_transformer_backend)(config, batch_size)
+    return _SHARED[key]
+
+
 class Encoder:
     """Queries get the model's instruction prefix; documents never do. Output is normalised."""
 
     def __init__(self, config: dict[str, Any], backend: Backend | None = None):
         self.config = config
         self.prefix = config["query_instruction"]
-        self.backend = backend or sentence_transformer_backend(config)
+        self.backend = backend or shared_backend(config)
 
     def queries(self, texts: Sequence[str]) -> np.ndarray:
         return normalise(self.backend([self.prefix + t for t in texts]))
@@ -120,10 +143,13 @@ class Encoder:
 
 
 def release(encoder: Encoder | None) -> None:
-    """Drop a real model from the GPU (no-op for a fake backend)."""
+    """Drop a real model from the GPU (no-op for a fake backend). A shared backend leaves the
+    shared cache too, so the next Encoder that asks loads a fresh copy."""
     model = getattr(getattr(encoder, "backend", None), "model", None)
     if model is None:
         return
+    for key in [k for k, b in _SHARED.items() if b is encoder.backend]:
+        del _SHARED[key]
     del encoder.backend.model
     encoder.backend = None
     import gc

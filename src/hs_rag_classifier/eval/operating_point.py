@@ -51,6 +51,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from hs_rag_classifier import paths as P
 from hs_rag_classifier.analysis import a3_agreement as AG
 from hs_rag_classifier.eval import metrics as M
 from hs_rag_classifier.eval.items import DATA_ROOT, sha256_file
@@ -281,7 +282,7 @@ def run(run_id: str = VAL_RUN, out: Path = OUT, log_mlflow: bool = True) -> dict
             df.to_csv(p, index=False)
             files.append(p)
     summary = {"run_id": run_id, "split": r.data.tags.get("split"), "config_hash": r.data.params.get("config_hash"),
-               "input": {"path": str(path), "sha256": sha256_file(path)},
+               "input": {**P.record(path), "sha256": sha256_file(path)},
                "test_runs_jsonl_sha256": sha256_file(R.TEST_LOG), "n_items": len(f),
                "n_clusters": int(f["cluster_id"].nunique()), "distinct_confidences": int(np.unique(a["confidence"]).size),
                "reproduction": {k: {"got": v[0], "expected": v[1]} for k, v in repro.items()},
@@ -489,7 +490,7 @@ def fix_rule(run_id: str = VAL_RUN, out: Path = RULE_OUT, rule_path: Path = RULE
         },
         "input": {
             "run_id": run_id,
-            "path": str(path),
+            **P.record(path),
             "sha256": sha256_file(path),
             "split": "val",
             "config_hash": r.data.params.get("config_hash"),
@@ -533,7 +534,7 @@ def fix_rule(run_id: str = VAL_RUN, out: Path = RULE_OUT, rule_path: Path = RULE
         rule["levels"][lvl] = {"confidence": conf_text[lvl], "headline_order": HEADLINE[lvl], "orders": orders,
                                **({"t1": t1} if lvl == "hs6" else {})}  # fmt: skip
     rule_path.write_text(json.dumps(rule, indent=2) + "\n", encoding="utf-8")
-    summary = {"rule_file": str(rule_path), "rule_sha256": sha256_file(rule_path), "reproduction_2a": repro,
+    summary = {"rule_file": P.record(rule_path), "rule_sha256": sha256_file(rule_path), "reproduction_2a": repro,
                "rule": rule, "test_runs_jsonl_sha256": sha256_file(R.TEST_LOG)}  # fmt: skip
     sp = out / "summary.json"
     sp.write_text(json.dumps(summary, indent=1, default=float) + "\n", encoding="utf-8")
@@ -665,7 +666,7 @@ def apply_to_test(rule_commit: str, rule_path: Path = RULE_PATH, out: Path = APP
                 raise RuntimeError(f"more than one A4 {x['dataset']} test run")
             runs[x["dataset"]] = (n, x["mlflow_run_id"])
     out.mkdir(parents=True, exist_ok=True)
-    summary: dict[str, Any] = {"rule_file": str(rule_path), "rule_sha256": rule_sha, "rule_commit": rule_commit,
+    summary: dict[str, Any] = {"rule_file": P.record(rule_path), "rule_sha256": rule_sha, "rule_commit": rule_commit,
                                "test_runs_jsonl_sha256": sha256_file(R.TEST_LOG), "sets": {}}  # fmt: skip
     files = []
     for ds, (col, expected) in EXPECTED_TOP1.items():
@@ -689,7 +690,7 @@ def apply_to_test(rule_commit: str, rule_path: Path = RULE_PATH, out: Path = APP
         p = out / f"{ds}.csv"
         table.to_csv(p, index=False)
         files.append(p)
-        summary["sets"][ds] = {"test_run": n, "mlflow_run_id": rid, "path": str(path), "sha256": sha256_file(path),
+        summary["sets"][ds] = {"test_run": n, "mlflow_run_id": rid, **P.record(path), "sha256": sha256_file(path),
                                "level": level, "n_items": len(f), "n_clusters": int(f["cluster_id"].nunique()),
                                "top1": top1, "rows": table.to_dict(orient="records")}  # fmt: skip
     sp = out / "summary.json"

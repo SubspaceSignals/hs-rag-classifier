@@ -32,6 +32,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from hs_rag_classifier import paths as P
 from hs_rag_classifier.arms import embed as E
 from hs_rag_classifier.arms.b0_bm25 import (
     CANDIDATE_CAP,
@@ -106,7 +107,7 @@ def build_index(
     key = index_key(config, sha256(codes_path))
     cols = ["code10", "cn8", "path_text", "declarable", "superseded"]
     docs = documents(pd.read_parquet(codes_path, columns=cols))
-    meta = {"config": {k: config[k] for k in INDEX_KEYS}, "codes_path": str(codes_path),
+    meta = {"config": {k: config[k] for k in INDEX_KEYS}, "codes_path": P.record(codes_path, root),
             "code10": list(docs["code10"])}  # fmt: skip
     cache_dir = root / INDEX_DIR / config["model"] / key
     emb, meta = E.cached_embeddings(cache_dir, list(docs["path_text"]), encoder, meta, cache)

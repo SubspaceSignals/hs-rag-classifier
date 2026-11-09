@@ -41,6 +41,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from hs_rag_classifier import paths as P
 from hs_rag_classifier.analysis import a3_agreement as AG
 from hs_rag_classifier.eval import metrics as M
 from hs_rag_classifier.eval.arms import Candidate, Prediction
@@ -213,7 +214,8 @@ def log_run(kind: str, result: dict, inputs: dict[str, Path], dataset: str, spli
     exp = R._experiment_id(f"compare-{dataset}", mlflow_dir / "artifacts")
     with mlflow.start_run(experiment_id=exp, run_name=f"a3-{kind}") as run:
         mlflow.set_tags({"comparison": "true", "kind": kind, "dataset": dataset, "split": split,
-                         **{f"input_{k}": str(p) for k, p in inputs.items()},
+                         **{f"input_{k}": P.record(p)["path"] for k, p in inputs.items()},
+                         **{f"input_{k}_root": str(P.record(p)["root"]) for k, p in inputs.items()},
                          **{f"input_{k}_sha256": sha256_file(p) for k, p in inputs.items()},
                          **tags})  # fmt: skip
         metrics = {k: v for k, v in _flat("", result, {}).items() if not k.startswith("inputs")}
