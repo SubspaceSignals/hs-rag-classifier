@@ -163,7 +163,8 @@ def test_ruling_overlap(tmp_path):
     assert out == {"train": 1, "test": 1}
 
 
-def test_endpoint_fetched_once_and_cached(tmp_path):
+def test_endpoint_fetched_once_and_cached(tmp_path, monkeypatch):
+    monkeypatch.delenv("TARIFF_API_OFFLINE", raising=False)  # mocked transport; CI sets the switch
     payload = json.loads((FIXTURES / "atoz" / "refs_fixture.json").read_text())
     calls = []
 

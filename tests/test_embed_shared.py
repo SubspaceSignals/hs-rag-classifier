@@ -44,6 +44,7 @@ def test_hybrid_and_b1ex_configs_share_one_key():
 
 
 def test_release_drops_the_shared_copy(fake_loader):
+    pytest.importorskip("torch")  # E.release frees CUDA memory through torch (ml group)
     cfg = E.model_config("bge-m3")
     enc = E.Encoder(cfg)
     E.release(enc)

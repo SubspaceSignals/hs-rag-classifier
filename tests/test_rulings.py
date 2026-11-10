@@ -185,7 +185,8 @@ def test_assign_splits_exact_and_stratified():
     assert out == R.assign_splits(units.drop(columns="split"), 40, 20, seed=1)  # deterministic
 
 
-def test_api_valid_on_uses_as_of_and_caches(tmp_path):
+def test_api_valid_on_uses_as_of_and_caches(tmp_path, monkeypatch):
+    monkeypatch.delenv("TARIFF_API_OFFLINE", raising=False)  # mocked transport; CI sets the switch
     calls = []
 
     def handler(req):

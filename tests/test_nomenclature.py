@@ -196,7 +196,8 @@ def api(handler, env=None, tmp_path=None, **kwargs):
     return client, sleeps
 
 
-def test_api_unauthenticated_and_cached(tmp_path):
+def test_api_unauthenticated_and_cached(tmp_path, monkeypatch):
+    monkeypatch.delenv("TARIFF_API_OFFLINE", raising=False)  # mocked transport; CI sets the switch
     calls = []
 
     def handler(req):
@@ -212,7 +213,8 @@ def test_api_unauthenticated_and_cached(tmp_path):
     assert (tmp_path / "sections" / "1.json").exists()
 
 
-def test_api_token_refreshed_on_401(tmp_path):
+def test_api_token_refreshed_on_401(tmp_path, monkeypatch):
+    monkeypatch.delenv("TARIFF_API_OFFLINE", raising=False)  # mocked transport; CI sets the switch
     tokens = iter(["t1", "t2"])
     seen = []
 
@@ -230,7 +232,8 @@ def test_api_token_refreshed_on_401(tmp_path):
     assert seen == ["Bearer t1", "Bearer t2"]
 
 
-def test_api_404_none_and_retry(tmp_path):
+def test_api_404_none_and_retry(tmp_path, monkeypatch):
+    monkeypatch.delenv("TARIFF_API_OFFLINE", raising=False)  # mocked transport; CI sets the switch
     calls = {"n": 0}
 
     def handler(req):
@@ -245,7 +248,8 @@ def test_api_404_none_and_retry(tmp_path):
     assert calls["n"] == 3 and len(sleeps) >= 2
 
 
-def test_api_gives_up(tmp_path):
+def test_api_gives_up(tmp_path, monkeypatch):
+    monkeypatch.delenv("TARIFF_API_OFFLINE", raising=False)  # mocked transport; CI sets the switch
     client, _ = api(lambda r: httpx.Response(503), tmp_path=tmp_path, max_retries=1)
     with pytest.raises(RuntimeError, match="Giving up"):
         client.get_json("/sections")
@@ -300,7 +304,9 @@ def test_superseded_rows_excluded_from_checks(codes, codes8):
     assert checks["integrity"]["current_duplicate_code10_suffix_rows"] == 0
 
 
-def test_check_superseded_against_api(codes, tmp_path):
+def test_check_superseded_against_api(codes, tmp_path, monkeypatch):
+    monkeypatch.delenv("TARIFF_API_OFFLINE", raising=False)  # mocked transport; CI sets the switch
+
     def handler(req):
         assert req.url.path.endswith("/commodities/0101300000")
         attrs = {"description": "Asses", "validity_start_date": "2012-01-01T00:00:00.000Z"}
