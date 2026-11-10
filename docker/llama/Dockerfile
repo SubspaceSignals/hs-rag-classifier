@@ -57,7 +57,8 @@ RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/lib
 # --- runtime -----------------------------------------------------------------------------------
 FROM nvidia/cuda:13.0.3-runtime-ubuntu24.04@sha256:76f46f3e649824ebd3685d3d86c42b0ea62af04f59242f419f56cd5804a72efb
 
-ARG APP_HOME=/home/cal
+# Neutral default; compose.yaml (and so scripts/docker_build.sh) always passes APP_HOME=${HOME}.
+ARG APP_HOME=/home/app
 
 # libgomp1 (OpenMP) and libssl3t64 (libssl.so.3, libcrypto.so.3): what the host binaries link
 # besides CUDA and libc. The base image's ubuntu user (uid/gid 1000) becomes "app" with

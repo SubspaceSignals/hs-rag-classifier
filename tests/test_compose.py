@@ -3,6 +3,7 @@
 import json
 import re
 import shlex
+import subprocess
 
 import pytest
 import yaml
@@ -45,7 +46,7 @@ def test_no_env_file_and_no_username():
     lines = (REPO_ROOT / "compose.yaml").read_text(encoding="utf-8").splitlines()
     text = "\n".join(line.split(" #")[0] for line in lines if not line.lstrip().startswith("#"))
     assert "env_file" not in text and all("env_file" not in s for s in SERVICES.values())
-    assert "/home/" not in text and not re.search(r"\bcal\b", text)
+    assert "/home/" not in text
     for svc in SERVICES.values():
         assert not any(re.search(r"SECRET|TOKEN|CLIENT_ID|PASSWORD", k) for k in svc["environment"])
 
@@ -159,3 +160,31 @@ def test_dockerignore_keeps_secrets_git_and_data_out():
     ignored = (REPO_ROOT / ".dockerignore").read_text().split()
     for entry in (".git", ".env", ".env.*", ".venv", "data", "models"):
         assert entry in ignored
+
+
+# Generic /home/<name> paths allowed in tracked files, by file. Everything else is refused, so no
+# personal home path (or user name in one) can enter the tree: paths are relative or ~/..., and
+# compose passes the real HOME at build and run time.
+HOME_PATHS_ALLOWED = {
+    ".devcontainer/devcontainer.json": {"vscode"},  # the dev container image's own user
+    "Dockerfile": {"app"},  # neutral ARG APP_HOME default; compose passes ${HOME}
+    "docker/llama/Dockerfile": {"app"},
+}
+
+
+def test_no_tracked_file_holds_a_personal_home_path():
+    if not (REPO_ROOT / ".git").exists():
+        pytest.skip("not a git checkout")
+    files = subprocess.run(["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True,
+                           check=True).stdout.decode().split("\0")  # fmt: skip
+    pattern = re.compile(rb"/home/([A-Za-z0-9._-]+)")
+    found = []
+    for name in filter(None, files):
+        path = REPO_ROOT / name
+        if not path.is_file():
+            continue
+        for m in pattern.finditer(path.read_bytes()):
+            user = m.group(1).decode()
+            if user not in HOME_PATHS_ALLOWED.get(name, set()):
+                found.append(f"{name}: /home/{user}")
+    assert not found, found

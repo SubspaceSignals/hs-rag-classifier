@@ -27,7 +27,7 @@ from hs_rag_classifier import ood as OOD
 from hs_rag_classifier.eval.items import DATA_ROOT, REPO_ROOT, EvalItem, sha256_file
 
 A4_CONFIG_HASH = "5da7ac1452b3"
-OPERATING_POINT_RULE_SHA = "0443a728325466e47a13970dae0fbcb1250cec4dffc3ac80b08a2b687461e907"
+OPERATING_POINT_RULE_SHA = "36357cb58e215f9261944c3bff8e648909bbd6ca085a9c510698554353a8429d"
 OOD_RULE_SHA = "b275978882c320ed96c69c32a2888ec4cc2eb02664ad2ac9e4f39c2ae6b3bcb9"
 OPERATING_POINT_RULE = REPO_ROOT / "configs" / "operating_point_rule.json"
 POLICY = "b"  # the rule file's headline cn8 order

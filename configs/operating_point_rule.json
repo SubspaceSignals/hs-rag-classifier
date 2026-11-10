@@ -15,7 +15,8 @@
   },
   "input": {
     "run_id": "04fee43dcca547e59f7440fe989f0362",
-    "path": "/home/cal/data/hs-rag-classifier/mlflow/artifacts/eval-rulings/04fee43dcca547e59f7440fe989f0362/artifacts/predictions.parquet",
+    "path": "mlflow/artifacts/eval-rulings/04fee43dcca547e59f7440fe989f0362/artifacts/predictions.parquet",
+    "root": "data",
     "sha256": "a453256706d3132e8404d62efa84e6df2ebec9539ee80d52b8adc274ab42010c",
     "split": "val",
     "config_hash": "5da7ac1452b3"

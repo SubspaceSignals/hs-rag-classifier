@@ -13,7 +13,8 @@ FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb
 
 COPY --from=uv /uv /uvx /bin/
 
-ARG APP_HOME=/home/cal
+# Neutral default; compose.yaml (and so scripts/docker_build.sh) always passes APP_HOME=${HOME}.
+ARG APP_HOME=/home/app
 RUN groupadd -g 1000 app \
  && useradd -u 1000 -g 1000 -d "$APP_HOME" -m -s /usr/sbin/nologin app
 

@@ -1,6 +1,6 @@
 """Hand-labelled test set: template and read-only checker.
 
-Calum writes every description and label; nothing here writes descriptions. The CSV lives
+The author writes every description and label; nothing here writes descriptions. The CSV lives
 outside the repo (default ~/data/hs-rag-classifier/hand/hand_v1.csv).
 
 Usage:
@@ -9,7 +9,7 @@ Usage:
 
 Columns:
     id                H001, H002, ... unique and sequential
-    description       terse purchase-line style, Calum's own words, 1 to 200 characters
+    description       terse purchase-line style, the author's own words, 1 to 200 characters
     cn8               required, 8 digits, a current cn8 (a declarable line beneath it)
     code10            optional; a current declarable line under that cn8
     label_confidence  sure or unsure

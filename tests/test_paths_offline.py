@@ -45,8 +45,10 @@ def test_resolve_reads_the_old_absolute_form(tmp_path):
     old = str(data / "mlflow" / "predictions.parquet")
     assert P.resolve(old, data_root=data, repo_root=repo) == Path(old)
     assert P.resolve({"path": old, "sha256": "x"}, data_root=data) == Path(old)  # no root key
+    # The frozen rule file now records its input in the record() form (no home path in the tree).
     rule = json.loads((P.REPO_ROOT / "configs" / "operating_point_rule.json").read_text())
-    assert P.resolve(rule["input"]) == Path(rule["input"]["path"])  # the frozen rule file
+    assert rule["input"]["root"] == "data" and not Path(rule["input"]["path"]).is_absolute()
+    assert P.resolve(rule["input"]) == P.DATA_ROOT / rule["input"]["path"]
     with pytest.raises(ValueError, match="without a root"):
         P.resolve("eval/x.json")
     with pytest.raises(ValueError, match="unknown root"):
