@@ -115,7 +115,10 @@ def test_build_script_refuses_dirty_trees_and_checks_the_import():
     assert "git status --porcelain" in text and "exit 1" in text
     assert "--user 1000:1000" in text and "import hs_rag_classifier.service" in text
     code = [x for x in text.splitlines() if not x.lstrip().startswith("#")]
-    assert not any("--rm" in x or " rm " in x or "rmi" in x for x in code)  # never deletes
+    # The import check is a throwaway container (--rm); nothing else is ever removed.
+    run = [x for x in code if "docker run" in x]
+    assert len(run) == 1 and "--rm" in run[0] and "--network none" in run[0]
+    assert not any(" rm " in x or "rmi" in x or "prune" in x for x in code)
 
 
 def test_api_mounts_the_shared_hf_blobs_store_read_only():

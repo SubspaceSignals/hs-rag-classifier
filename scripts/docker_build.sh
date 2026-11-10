@@ -77,11 +77,10 @@ for svc in "${to_build[@]}"; do
 done
 
 # Build check: the API image's package must import as the image's own user (uid 1000). Run 1
-# failed here (NTFS 0700 source folders copied unreadable). No network, no GPU. The container is
-# kept (named, stopped) rather than removed with --rm: nothing in Docker is deleted by script.
+# failed here (NTFS 0700 source folders copied unreadable). No network, no GPU. A throwaway
+# container (--rm); the script removes no image, tag or other container.
 if [[ " ${to_build[*]} " == *" api "* ]]; then
-  name="hs-rag-import-check-${GIT_COMMIT:0:12}-$(date +%s)"
-  echo "import check: $API_IMAGE as 1000:1000 (container $name, left stopped)"
-  docker run --name "$name" --network none --user 1000:1000 "$API_IMAGE" \
+  echo "import check: $API_IMAGE as 1000:1000 (throwaway container, --rm)"
+  docker run --rm --network none --user 1000:1000 "$API_IMAGE" \
     python -c "import hs_rag_classifier.service; print('import ok:', hs_rag_classifier.service.__file__)"
 fi

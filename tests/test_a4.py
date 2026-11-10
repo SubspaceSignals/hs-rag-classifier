@@ -102,13 +102,16 @@ def test_config_is_a3_plus_adapter_scales_and_temperatures():
     assert cfg["a4"]["candidate"] == "final"
 
 
-# A4's hash includes the adapter's absolute path under HOME (adapter_block), so it holds only on
-# the dev machine; CI deselects it (pytest -m "not frozen_host").
-@pytest.mark.frozen_host
-def test_config_hashes():
+def test_portable_config_hashes():
     got = {"a1": A1.load_config(), "a2": A2.load_config(),
            "a2_order_avg": A2.load_candidate_config(), "a3": A3.load_config()}  # fmt: skip
     assert {k: config_hash(v) for k, v in got.items()} == HASHES
+
+
+# A4's hash includes the adapter's absolute path under HOME (adapter_block), so it holds only on
+# the dev machine; CI deselects it (pytest -m "not frozen_host").
+@pytest.mark.frozen_host
+def test_a4_config_hash():
     assert config_hash(A4.load_config()) == A4_HASH
 
 
