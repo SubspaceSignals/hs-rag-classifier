@@ -1,8 +1,10 @@
 """The service's pipeline object: the frozen A4 arm, the operating-point rule and the OOD rule.
 
 Start-up (A4Service.from_frozen) refuses, before loading anything heavy, unless A4's config_hash,
-the operating-point rule's SHA-256 and the OOD rule's SHA-256 are the pinned values. The arm is
-the evaluations' own arms.a4.A4Arm (its pin, slot and adapter guards run as in every run); the
+the operating-point rule's SHA-256 and the OOD rule's SHA-256 are the pinned values, and the
+adapter file has the config's SHA-256 (hashed here, once; the result is kept). /health then only
+checks that llama-server is up and lists that adapter (path and id), never re-hashing the file.
+The arm is the evaluations' own arms.a4.A4Arm (its pin, slot and adapter guards run as in every run); the
 retriever, B1-ex and the OOD scorer share one bge-m3 (arms.embed.shared_backend), held for the
 app's lifetime and never released on a request path.
 
@@ -75,6 +77,20 @@ def verify_pins(
     return got
 
 
+def verify_adapter(config: dict[str, Any]) -> dict[str, str]:
+    """Hash the config's adapter file once and refuse unless it has the declared SHA-256."""
+    want = config["adapter"]
+    path = Path(want["path"]).expanduser()
+    if not path.is_file():
+        raise StartupError(f"refusing to start: the adapter {path} is not a file")
+    got = sha256_file(path)
+    if got != want["sha256"]:
+        raise StartupError(
+            f"refusing to start: the adapter {path} has SHA-256 {got}, expected {want['sha256']}"
+        )
+    return {"path": str(path), "sha256": got}
+
+
 def decide(op_review: bool, ood_flagged: bool) -> tuple[bool, list[str]]:
     """needs_review = operating point OR OOD flag; the reasons in a fixed order."""
     reasons = [
@@ -108,7 +124,8 @@ class A4Service:
 
     def __init__(self, arm, scorer: OOD.OODScorer, config: dict[str, Any], op_rule: dict[str, Any],
                  ood_rule: dict[str, Any], provenance: dict[str, str], llama_url: str,
-                 ruling_cn8: np.ndarray | None = None):  # fmt: skip
+                 ruling_cn8: np.ndarray | None = None,
+                 adapter: dict[str, Any] | None = None):  # fmt: skip
         from hs_rag_classifier.eval import operating_point as OP
 
         self.arm, self.scorer, self.config = arm, scorer, config
@@ -116,6 +133,7 @@ class A4Service:
         self.thresholds = OP.rules_for(op_rule, "cn8", POLICY)["lower_bound"]["thresholds"]
         self.llama_url = llama_url
         self.ruling_cn8 = ruling_cn8 if ruling_cn8 is not None else arm.b1ex.index.cn8
+        self.adapter = adapter  # {"path", "sha256", "id"}, hashed and read once at start-up
         self.loaded = True
 
     @classmethod
@@ -130,6 +148,7 @@ class A4Service:
         pins = verify_pins(
             config, settings.operating_point_rule, settings.ood_rule
         )  # before any load
+        adapter = verify_adapter(config)  # the one hash of the adapter file in the service
         ood_rule = OOD.load_rule(settings.ood_rule)
         op_rule = json.loads(Path(settings.operating_point_rule).read_text(encoding="utf-8"))
         served = {**config, "client": {**config["client"], "base_url": settings.llama_url}}
@@ -141,6 +160,13 @@ class A4Service:
             raise StartupError(
                 f"refusing to start: the A4 pipeline did not load ({type(exc).__name__}: {exc})"
             ) from exc
+        from hs_rag_classifier.pipeline import llm
+
+        try:
+            listed = llm.server_adapter(settings.llama_url, adapter["path"])
+        except llm.AdapterError as exc:
+            raise StartupError(f"refusing to start: {exc}") from exc
+        adapter = {**adapter, "id": listed.get("id")}
         enc = arm.b1ex.encoder  # B1-ex's encoder: the same shared bge-m3 as the retriever's
         index = OOD.RulingsIndex(
             arm.b1ex.index.embeddings, [str(r) for r in arm.b1ex.index.meta["refs"]]
@@ -148,7 +174,8 @@ class A4Service:
         scorer = OOD.OODScorer(index, enc.queries, int(config["max_input_chars"]))
         git = R.git_info()
         prov = {**pins, "git_commit": git["commit"] + ("-dirty" if git["dirty"] else "")}
-        return cls(arm, scorer, config, op_rule, ood_rule, prov, settings.llama_url)
+        return cls(arm, scorer, config, op_rule, ood_rule, prov, settings.llama_url,
+                   adapter=adapter)  # fmt: skip
 
     def encoder_backends(self) -> dict[str, Any]:
         """The bge-m3 backend each component holds (all the same object)."""
@@ -180,9 +207,11 @@ class A4Service:
         needs, reasons = decide(op, flagged)
         cands = [{"cn8": c.code[:8], "confidence": float(c.score)} for c in pred.candidates[:3]]
         cite = (rat or {}).get("citation")
+        top1 = cands[0]["cn8"] if cands else None
+        prec_cn8 = str(self.ruling_cn8[near.row])
         return {
             "request_id": request_id,
-            "cn8": cands[0]["cn8"] if cands else None,
+            "cn8": top1,
             "confidence": float(pred.confidence),
             "top3": cands,
             "needs_review": needs,
@@ -191,21 +220,26 @@ class A4Service:
                     "flagged": flagged, "nearest_ruling_ref": near.ref, "message": message},
             "rationale": pred.rationale,
             "citation": {"quote": cite.get("quote"), "pass": bool(cite.get("pass"))} if cite else None,
-            "precedent": {"ref": near.ref, "cn8": str(self.ruling_cn8[near.row]), "similarity": near.similarity},
+            "precedent": {"ref": near.ref, "cn8": prec_cn8, "similarity": near.similarity,
+                          "agrees_with_prediction": top1 is not None and prec_cn8 == top1},
             "provenance": dict(self.provenance),
             "advisory": det.get("disclaimer") or ADVISORY,
         }  # fmt: skip
 
     def health(self) -> tuple[bool, str | None]:
-        """(ok, reason): loaded, llama-server up and serving the expected A4 adapter."""
+        """(ok, reason): loaded, llama-server up and listing the adapter start-up hashed (same
+        path and id). Reads /lora-adapters only; the file is never re-hashed here."""
         from hs_rag_classifier.pipeline import llm
 
-        if not self.loaded:
+        if not self.loaded or not self.adapter:
             return False, "pipeline not loaded"
         if not llm.ServerInfo(self.llama_url).up():
             return False, f"llama-server at {self.llama_url} is not reachable"
         try:
-            llm.check_server_adapters(self.llama_url, self.config["adapter"])
+            listed = llm.server_adapter(self.llama_url, self.adapter["path"])
         except llm.AdapterError as exc:
             return False, f"llama-server adapter check failed: {exc}"
+        if listed.get("id") != self.adapter["id"]:
+            return False, (f"llama-server adapter check failed: id {listed.get('id')}, "
+                           f"expected {self.adapter['id']}")  # fmt: skip
         return True, None

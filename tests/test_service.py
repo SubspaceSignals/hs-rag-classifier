@@ -3,6 +3,7 @@ on a fake arm and a fake OOD index, with the real operating-point rule file (pol
 
 import json
 import logging
+from pathlib import Path
 
 import httpx
 import numpy as np
@@ -21,6 +22,7 @@ OOD_RULE = {"threshold": 0.5, "flag": "similarity < threshold"}
 # texts starting "near" sit on ruling r1 (similarity 1); "far" ones at 0.3 from every ruling
 VECS = {"near": [1.0, 0.0, 0.0], "far": [0.3, 0.3, float(np.sqrt(1 - 0.18))]}
 INDEX = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], np.float32)  # ref r1 (cn8 11111111), r2
+ADAPTER = {"path": "/models/a4.gguf", "sha256": "d" * 64, "id": 0}
 
 
 def fake_vectors(texts):
@@ -50,12 +52,12 @@ class FakeArm:
                            rationale="'Of plastics': toy.", details=det)]  # fmt: skip
 
 
-def service(arm=None, encode=fake_vectors):
+def service(arm=None, encode=fake_vectors, ruling_cn8=("11111111", "22222222")):
     scorer = OOD.OODScorer(OOD.RulingsIndex(INDEX, ["r1", "r2"]), encode, max_input_chars=1000)
     prov = {"config_hash": core.A4_CONFIG_HASH, "operating_point_rule_sha": core.OPERATING_POINT_RULE_SHA,
             "ood_rule_sha": core.OOD_RULE_SHA, "git_commit": "abc"}  # fmt: skip
     return core.A4Service(arm or FakeArm(), scorer, {"adapter": {}}, OP_RULE, OOD_RULE, prov,
-                          "http://127.0.0.1:8080", ruling_cn8=np.array(["11111111", "22222222"]))  # fmt: skip
+                          "http://127.0.0.1:8080", ruling_cn8=np.array(ruling_cn8), adapter=ADAPTER)  # fmt: skip
 
 
 def client(pipe=None):
@@ -88,7 +90,8 @@ def test_accepts_max_length_and_returns_the_schema():
         "39269097",
     ]
     assert body["citation"] == {"quote": "of plastics", "pass": True}
-    assert body["precedent"] == {"ref": "r1", "cn8": "11111111", "similarity": pytest.approx(1.0)}
+    assert body["precedent"] == {"ref": "r1", "cn8": "11111111", "similarity": pytest.approx(1.0),
+                                 "agrees_with_prediction": False}  # fmt: skip
     assert set(body["ood"]) == {
         "similarity",
         "threshold",
@@ -162,14 +165,114 @@ def test_health_ok_and_failing(monkeypatch):
     monkeypatch.setattr(llm.ServerInfo, "up", lambda self: False)
     assert s.health()[0] is False and "not reachable" in s.health()[1]
     monkeypatch.setattr(llm.ServerInfo, "up", lambda self: True)
-
-    def bad(url, adapter):
-        raise llm.AdapterError("lists []")
-
-    monkeypatch.setattr(llm, "check_server_adapters", bad)
-    assert s.health() == (False, "llama-server adapter check failed: lists []")
-    monkeypatch.setattr(llm, "check_server_adapters", lambda url, adapter: {})
+    monkeypatch.setattr(llm.ServerInfo, "lora_adapters", lambda self: [])
+    assert s.health()[0] is False and "lists none" in s.health()[1]
+    monkeypatch.setattr(llm.ServerInfo, "lora_adapters", lambda self: [dict(ADAPTER)])
     assert s.health() == (True, None)
+
+
+# --- precedent ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("ruling_cn8", "agrees"), [(("95030095", "22222222"), True),
+                                                    (("11111111", "22222222"), False)])  # fmt: skip
+def test_precedent_agrees_with_prediction(ruling_cn8, agrees):
+    with client(service(ruling_cn8=ruling_cn8)) as c:
+        b = c.post("/classify", json={"description": "near agree"}).json()
+    assert b["cn8"] == "95030095" and b["precedent"]["ref"] == "r1"
+    assert b["precedent"]["agrees_with_prediction"] is agrees
+    schema = client().get("/openapi.json").json()["components"]["schemas"]["Precedent"]
+    assert "agrees_with_prediction" in schema["required"]
+    assert schema["properties"]["agrees_with_prediction"]["examples"] == [True]
+
+
+# --- adapter: hashed once at start-up, never on /health -----------------------------------
+
+
+class _NS:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def _frozen_setup(monkeypatch, tmp_path, declared_sha=None):
+    """from_frozen on a fake arm; the adapter is a real small file. Returns the hash counters."""
+    import hashlib
+
+    from hs_rag_classifier.arms import a4 as A4
+    from hs_rag_classifier.eval.arms import config_hash
+    from hs_rag_classifier.pipeline import llm
+
+    gguf = tmp_path / "a4.gguf"
+    gguf.write_bytes(b"adapter bytes")
+    sha = hashlib.sha256(b"adapter bytes").hexdigest()
+    cfg = {"adapter": {"path": str(gguf), "sha256": declared_sha or sha}, "max_input_chars": 1000,
+           "client": {"base_url": "x"}}  # fmt: skip
+    monkeypatch.setattr(A4, "load_config", lambda root=None: cfg)
+    monkeypatch.setattr(core, "A4_CONFIG_HASH", config_hash(cfg))
+    loaded = []
+
+    def fake_arm(config, root):
+        loaded.append(1)
+        idx = _NS(embeddings=INDEX, meta={"refs": ["r1", "r2"]}, cn8=np.array(["11111111", "2"]))
+        arm = FakeArm()
+        arm.b1ex = _NS(index=idx, encoder=_NS(queries=fake_vectors))
+        return arm
+
+    monkeypatch.setattr(A4, "A4Arm", fake_arm)
+    counts = {"adapter": 0, "llm": 0}
+    real = core.sha256_file
+
+    def counting(path):
+        counts["adapter"] += Path(path) == gguf
+        return real(path)
+
+    def no_llm_hash(path):
+        counts["llm"] += 1
+        raise AssertionError("llm._file_sha256 must not run in the service")
+
+    monkeypatch.setattr(core, "sha256_file", counting)
+    monkeypatch.setattr(llm, "_file_sha256", no_llm_hash)
+    listing = {"loras": [{"id": 0, "path": str(gguf), "scale": 1.0}]}
+    monkeypatch.setattr(llm.ServerInfo, "up", lambda self: True)
+    monkeypatch.setattr(llm.ServerInfo, "lora_adapters", lambda self: listing["loras"])
+    return gguf, sha, counts, listing, loaded
+
+
+def test_health_never_rehashes_the_adapter(monkeypatch, tmp_path):
+    gguf, sha, counts, _, _ = _frozen_setup(monkeypatch, tmp_path)
+    with TestClient(create_app()) as c:
+        assert counts["adapter"] == 1  # start-up hashed it once
+        assert c.app.state.pipeline.adapter == {"path": str(gguf), "sha256": sha, "id": 0}
+        for _ in range(5):
+            assert c.get("/health").status_code == 200
+    assert counts == {"adapter": 1, "llm": 0}
+
+
+def test_health_503_when_the_server_reports_a_different_adapter(monkeypatch, tmp_path):
+    gguf, _, counts, listing, _ = _frozen_setup(monkeypatch, tmp_path)
+    with TestClient(create_app()) as c:
+        assert c.get("/health").status_code == 200
+        for other in ([{"id": 0, "path": str(tmp_path / "other.gguf")}],
+                      [{"id": 1, "path": str(gguf)}],
+                      [{"id": 0, "path": str(gguf)}, {"id": 1, "path": str(gguf)}], []):  # fmt: skip
+            listing["loras"] = other
+            r = c.get("/health")
+            assert r.status_code == 503 and "adapter check failed" in r.json()["reason"]
+    assert counts == {"adapter": 1, "llm": 0}
+
+
+def test_startup_refuses_a_wrong_adapter_hash(monkeypatch, tmp_path):
+    _, _, counts, _, loaded = _frozen_setup(monkeypatch, tmp_path, declared_sha="0" * 64)
+    with pytest.raises(core.StartupError, match="adapter .* has SHA-256"), TestClient(create_app()):
+        pass
+    assert loaded == [] and counts["adapter"] == 1  # refused before the arm loads
+
+
+def test_startup_refuses_when_the_server_lists_another_adapter(monkeypatch, tmp_path):
+    _, _, _, listing, _ = _frozen_setup(monkeypatch, tmp_path)
+    listing["loras"] = [{"id": 0, "path": str(tmp_path / "other.gguf")}]
+    with pytest.raises(core.StartupError, match="lists"), TestClient(create_app()):
+        pass
 
 
 # --- start-up refusal ---------------------------------------------------------------------

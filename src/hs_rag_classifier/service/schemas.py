@@ -52,9 +52,15 @@ class Citation(BaseModel):
 
 
 class Precedent(BaseModel):
+    """The nearest train ruling (full index) to the description."""
+
     ref: str
     cn8: str
     similarity: float
+    agrees_with_prediction: bool = Field(
+        description="True when the nearest ruling's cn8 equals the predicted top-1 cn8",
+        examples=[True],
+    )
 
 
 class Provenance(BaseModel):

@@ -133,11 +133,31 @@ def check_server_adapters(base_url: str = BASE_URL, adapter: dict[str, str] | No
     got = _file_sha256(path)
     if got != adapter["sha256"]:
         raise AdapterError(f"{path} has SHA-256 {got}, the config declares {adapter['sha256']}")
+    _check_listed(where, loras, path)
+    return {"lora_adapter": path.name, "lora_adapter_sha256": got}
+
+
+def _check_listed(where: str, loras: list[dict], path: Path) -> dict:
+    """The one listed adapter, which must be path; AdapterError otherwise. No hashing."""
+    listed = [str(x.get("path")) for x in loras]
     if not loras:
         raise AdapterError(f"the config declares the adapter {path}, but {where} lists none")
     if len(loras) != 1 or Path(listed[0]).expanduser().resolve() != path.resolve():
         raise AdapterError(f"{where} lists {listed}; the config declares exactly {path}")
-    return {"lora_adapter": path.name, "lora_adapter_sha256": got}
+    return loras[0]
+
+
+def server_adapter(base_url: str, path: str | Path,
+                   transport: httpx.BaseTransport | None = None) -> dict:  # fmt: skip
+    """The server's one /lora-adapters entry ({"id", "path", ...}), which must be path. Reads
+    the listing only and never hashes the file (the service hashes it once at start-up)."""
+    where = f"llama-server at {base_url}"
+    try:
+        loras = ServerInfo(base_url, transport).lora_adapters()
+    except (httpx.HTTPError, ValueError, TypeError) as exc:
+        raise AdapterError(f"cannot read /lora-adapters from {where} "
+                           f"({type(exc).__name__}: {exc})") from exc  # fmt: skip
+    return _check_listed(where, loras, Path(path).expanduser())
 
 
 def make_chat(client: dict[str, Any], base_url: str = BASE_URL,
