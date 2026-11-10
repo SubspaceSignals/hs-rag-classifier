@@ -58,6 +58,7 @@ import hashlib
 import html
 import io
 import json
+import os
 import random
 import re
 import sys
@@ -79,6 +80,11 @@ CSV_URL = DBT_BASE + "/versions/{version}/tables/commodities-report/data?format=
 API_BASE_AUTH = "https://api.trade-tariff.service.gov.uk/uk/api"
 API_BASE_OPEN = "https://www.trade-tariff.service.gov.uk/uk/api"
 DEFAULT_DELAY_S = 1.0
+# TARIFF_API_OFFLINE=1 (the API container sets it): a cache miss makes no request, fetches no
+# token and writes nothing; get_json raises TariffApiOffline, which the validator
+# (pipeline/validate.py) already treats as "API down", so the local nomenclature decides.
+# Unset (the host default), behaviour is unchanged.
+ENV_API_OFFLINE = "TARIFF_API_OFFLINE"
 DATA_ROOT = Path.home() / "data" / "hs-rag-classifier"
 SPOT_CHECK_FIXED = ("8211910000", "7323930000")
 SPOT_CHECK_RANDOM = 20
@@ -406,6 +412,15 @@ def parse_chapter(chapter_json: dict, source_url: str) -> dict:
 # --- HTTP -----------------------------------------------------------------------------------
 
 
+class TariffApiOffline(RuntimeError):
+    """A cache miss while TARIFF_API_OFFLINE=1: no request was made."""
+
+
+def api_offline(environ=None) -> bool:
+    env = os.environ if environ is None else environ
+    return env.get(ENV_API_OFFLINE) == "1"
+
+
 class TariffApi:
     """Trade Tariff API client: 1 request a second, retries with backoff, raw JSON cache.
 
@@ -469,6 +484,8 @@ class TariffApi:
         cache_path = self.cache_dir / (name + ".json")
         if cache and cache_path.exists() and not self.refresh:
             return json.loads(cache_path.read_text(encoding="utf-8"))
+        if api_offline():
+            raise TariffApiOffline(f"{ENV_API_OFFLINE}=1 and {name} is not cached; no request made")
 
         problem = ""
         reauthed = False

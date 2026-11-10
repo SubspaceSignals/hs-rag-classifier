@@ -43,6 +43,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -78,13 +80,36 @@ def tracking_uri(mlflow_dir: Path = MLFLOW_DIR) -> str:
     return f"sqlite:///{(mlflow_dir / 'mlflow.db').resolve()}"
 
 
-def git_info(repo: Path = REPO_ROOT) -> dict[str, Any]:
-    def git(*args: str) -> str:
-        return subprocess.run(
-            ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
-        ).stdout.strip()
+ENV_GIT_COMMIT, ENV_GIT_DIRTY = "HS_RAG_GIT_COMMIT", "HS_RAG_GIT_DIRTY"
 
-    return {"commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain"))}
+
+class GitInfoError(RuntimeError):
+    """Neither git (a .git and the git binary) nor the HS_RAG_GIT_* variables give provenance."""
+
+
+def git_info(repo: Path = REPO_ROOT, environ: dict[str, str] | None = None,
+             which=shutil.which) -> dict[str, Any]:  # fmt: skip
+    """{"commit", "dirty"} from git when repo/.git exists and git is installed (unchanged, and it
+    wins over the environment). Otherwise, as in the API image, which has neither: from
+    HS_RAG_GIT_COMMIT (40 hex characters) and HS_RAG_GIT_DIRTY ("true" or "false"), set at build
+    time by scripts/docker_build.sh. With neither source, GitInfoError."""
+    if (Path(repo) / ".git").exists() and which("git"):
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True
+            ).stdout.strip()
+
+        return {"commit": git("rev-parse", "HEAD"), "dirty": bool(git("status", "--porcelain"))}
+    env = os.environ if environ is None else environ
+    commit, dirty = env.get(ENV_GIT_COMMIT, ""), env.get(ENV_GIT_DIRTY, "")
+    why = "no .git" if not (Path(repo) / ".git").exists() else "no git binary"
+    if not re.fullmatch(r"[0-9a-f]{40}", commit) or dirty not in ("true", "false"):
+        raise GitInfoError(
+            f"no git provenance: {why} at {repo}, and {ENV_GIT_COMMIT} (40 hex characters, got "
+            f"{commit!r}) and {ENV_GIT_DIRTY} ('true' or 'false', got {dirty!r}) are not both set"
+        )
+    return {"commit": commit, "dirty": dirty == "true"}
 
 
 def valid_codes(root: Path = DATA_ROOT) -> tuple[set[str], set[str]]:

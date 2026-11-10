@@ -149,6 +149,10 @@ class A4Service:
             config, settings.operating_point_rule, settings.ood_rule
         )  # before any load
         adapter = verify_adapter(config)  # the one hash of the adapter file in the service
+        try:  # git, or HS_RAG_GIT_* in the image; neither refuses here, before any load
+            git = R.git_info()
+        except R.GitInfoError as exc:
+            raise StartupError(f"refusing to start: {exc}") from exc
         ood_rule = OOD.load_rule(settings.ood_rule)
         op_rule = json.loads(Path(settings.operating_point_rule).read_text(encoding="utf-8"))
         served = {**config, "client": {**config["client"], "base_url": settings.llama_url}}
@@ -172,7 +176,6 @@ class A4Service:
             arm.b1ex.index.embeddings, [str(r) for r in arm.b1ex.index.meta["refs"]]
         )
         scorer = OOD.OODScorer(index, enc.queries, int(config["max_input_chars"]))
-        git = R.git_info()
         prov = {**pins, "git_commit": git["commit"] + ("-dirty" if git["dirty"] else "")}
         return cls(arm, scorer, config, op_rule, ood_rule, prov, settings.llama_url,
                    adapter=adapter)  # fmt: skip

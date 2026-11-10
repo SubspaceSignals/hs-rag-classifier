@@ -268,6 +268,22 @@ def test_startup_refuses_a_wrong_adapter_hash(monkeypatch, tmp_path):
     assert loaded == [] and counts["adapter"] == 1  # refused before the arm loads
 
 
+def test_startup_refuses_without_git_provenance(monkeypatch, tmp_path):
+    from hs_rag_classifier.eval import runner as R
+
+    _, _, _, _, loaded = _frozen_setup(monkeypatch, tmp_path)
+    real = R.git_info
+    monkeypatch.setattr(R, "git_info", lambda: real(repo=tmp_path, environ={}))
+    with pytest.raises(core.StartupError, match="no git provenance"), TestClient(create_app()):
+        pass
+    assert loaded == []  # refused before the arm loads
+    sha = "f" * 40
+    env = {R.ENV_GIT_COMMIT: sha, R.ENV_GIT_DIRTY: "false"}
+    monkeypatch.setattr(R, "git_info", lambda: real(repo=tmp_path, environ=env))
+    with TestClient(create_app()) as c:
+        assert c.app.state.pipeline.provenance["git_commit"] == sha
+
+
 def test_startup_refuses_when_the_server_lists_another_adapter(monkeypatch, tmp_path):
     _, _, _, listing, _ = _frozen_setup(monkeypatch, tmp_path)
     listing["loras"] = [{"id": 0, "path": str(tmp_path / "other.gguf")}]
