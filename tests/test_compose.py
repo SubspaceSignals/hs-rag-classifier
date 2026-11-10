@@ -113,6 +113,46 @@ def test_build_script_refuses_dirty_trees_and_checks_the_import():
     text = (REPO_ROOT / "scripts" / "docker_build.sh").read_text()
     assert "git status --porcelain" in text and "exit 1" in text
     assert "--user 1000:1000" in text and "import hs_rag_classifier.service" in text
+    code = [x for x in text.splitlines() if not x.lstrip().startswith("#")]
+    assert not any("--rm" in x or " rm " in x or "rmi" in x for x in code)  # never deletes
+
+
+def test_api_mounts_the_shared_hf_blobs_store_read_only():
+    # The HF cache's repo folders hold relative links into hub/blobs (run 2 of step 4b stopped at
+    # API start-up with them dangling). llama's GGUF repo is self-contained, so only the api.
+    blobs = "${HOME}/.cache/huggingface/hub/blobs"
+    assert f"{blobs}:{blobs}:ro" in SERVICES["api"]["volumes"]
+    assert not any(v.startswith(blobs) for v in SERVICES["llama"]["volumes"])
+
+
+def test_image_tags_follow_the_fixed_scheme():
+    llama = SERVICES["llama"]["image"]
+    assert re.fullmatch(
+        r"hs-rag-classifier/llama:b11510-\$\{LLAMA_DOCKERFILE_COMMIT:\?[^}]*\}", llama
+    )
+    assert re.fullmatch(r"hs-rag-classifier/api:\$\{GIT_COMMIT:\?[^}]*\}", SERVICES["api"]["image"])
+    env = (REPO_ROOT / "scripts" / "stack_env.sh").read_text()
+    assert "LLAMA_DOCKERFILE_COMMIT=$(git log -1 --format=%h -- docker/llama/Dockerfile)" in env
+    assert 'LLAMA_IMAGE="hs-rag-classifier/llama:b11510-${LLAMA_DOCKERFILE_COMMIT}"' in env
+    assert 'API_IMAGE="hs-rag-classifier/api:${GIT_COMMIT}"' in env
+
+
+def test_build_script_never_overwrites_an_existing_tag():
+    text = (REPO_ROOT / "scripts" / "docker_build.sh").read_text()
+    assert '. "$(dirname "$0")/stack_env.sh"' in text
+    assert "refusing to build $1: $img already exists" in text
+    assert 'docker compose build "${to_build[@]}"' in text
+    assert "docker tag" not in text and "--pull" not in text
+
+
+def test_up_script_runs_the_mount_preflight_before_compose_up():
+    lines = (REPO_ROOT / "scripts" / "docker_up.sh").read_text().splitlines()
+    pre = next(
+        i for i, x in enumerate(lines) if "scripts/preflight_mounts.py" in x and "#" not in x
+    )
+    up = next(i for i, x in enumerate(lines) if x.startswith("docker compose up"))
+    assert pre < up and "set -euo pipefail" in lines
+    assert "--no-build" in lines[up] and "--pull never" in lines[up]
 
 
 def test_dockerignore_keeps_secrets_git_and_data_out():
