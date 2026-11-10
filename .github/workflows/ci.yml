@@ -1,0 +1,93 @@
+# CI on every push and pull request: lock check, lint, the test suite without torch, and a
+# full-history secret scan. GitHub-hosted standard runners only; no repository secrets.
+#
+# Not here: the torch and fine-tuning tests (ci-torch.yml, weekly and on demand: the ml group is a
+# ~3.8 GB download), and anything needing the GPU, llama-server, the HF cache or ~/data (those
+# tests skip themselves when the resource is absent; the skip guard below bounds how many).
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TARIFF_API_OFFLINE: "1"  # a guard: no test may reach the real Trade Tariff API
+      HF_HUB_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.1"
+          python-version: "3.12"
+
+      - name: uv.lock matches pyproject.toml
+        run: uv lock --check
+
+      # Name every group: uv sync removes the ones it is not given. --no-sync on every uv run
+      # below, or uv run would re-sync to the default groups and drop llm, serve and tracing.
+      - name: Install (dev, llm, serve, tracing; no torch)
+        run: uv sync --frozen --group dev --group llm --group serve --group tracing
+
+      - name: ruff check
+        run: uv run --no-sync ruff check
+
+      - name: ruff format --check
+        run: uv run --no-sync ruff format --check
+
+      # frozen_host: passes only on the dev machine's HOME (A4's config_hash includes a path
+      # under it); it runs in every local pytest.
+      - name: pytest
+        run: uv run --no-sync pytest -m "not frozen_host" -rs --junitxml=pytest-junit.xml
+
+      # Expected skips (9), from the local dry run of these exact steps on a fresh clone:
+      #   torch absent (ml group not installed): test_finetune_train (whole module, 1),
+      #     test_b2_encoder (1), test_embed_shared release_drops_the_shared_copy (1);
+      #   no llama-server: test_pipeline (1), test_a2_pipeline (1);
+      #   no GPU, HF cache or ~/data: test_b1_embed (1), test_embed_shared (1), test_ood (1),
+      #     test_atoz local nomenclature build (1).
+      - name: Skip guard
+        run: uv run --no-sync python scripts/check_skips.py pytest-junit.xml --max-skipped 9 --min-run 400
+
+  secret-scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GITLEAKS_VERSION: "8.30.1"
+      # sha256 of gitleaks_8.30.1_linux_x64.tar.gz, from the release's checksums file
+      GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # full history
+          persist-credentials: false
+
+      - name: Download gitleaks and verify its checksum
+        run: |
+          set -euo pipefail
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -sSfL -o "$tarball" "$base/$tarball"
+          curl -sSfL -o checksums.txt "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " ${tarball}\$" checksums.txt | sha256sum -c -
+          echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" gitleaks
+          ./gitleaks version
+
+      - name: gitleaks over the full history
+        run: '"$RUNNER_TEMP/gitleaks" git --redact --no-banner --verbose --config .gitleaks.toml --exit-code 1 .'

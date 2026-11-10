@@ -1,5 +1,7 @@
 # hs-rag-classifier
 
+[![CI](https://github.com/SubspaceSignals/hs-rag-classifier/actions/workflows/ci.yml/badge.svg)](https://github.com/SubspaceSignals/hs-rag-classifier/actions/workflows/ci.yml)
+
 Suggests UK commodity codes (8 digits and up) from free-text product descriptions, with a calibrated confidence and a rationale that cites the tariff text. Runs entirely on a local GPU.
 
 > **Status:** Phase 0, set-up. No classifier yet.

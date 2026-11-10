@@ -1,0 +1,21 @@
+# gitleaks configuration for the CI secret scan (.github/workflows/ci.yml, full history, --redact).
+#
+# The default rules plus one rule for the project's only credential. No allowlist: over the full
+# history the default rules find nothing in uv.lock's hashes, the configs' sha256 pins, the
+# Dockerfiles' image digests or tests/fixtures/, so none is needed. Add an allowlist entry only
+# for a confirmed false positive, scoped to its path and a regex, never a whole directory.
+
+title = "hs-rag-classifier"
+
+[extend]
+useDefault = true
+
+# The Trade Tariff API OAuth client credentials live only in the uncommitted .env; .env.example
+# holds the names with empty values. Any assignment with a value is a finding, whatever its
+# entropy (the default generic-api-key rule needs high entropy and ignores the client ID).
+[[rules]]
+id = "trade-tariff-client-credentials"
+description = "Trade Tariff API OAuth client ID or secret with a value"
+regex = '''(?i)TRADE_TARIFF_CLIENT_(?:ID|SECRET)[ \t]*[:=][ \t]*["']?([A-Za-z0-9._~+/=-]{8,})'''
+secretGroup = 1
+keywords = ["trade_tariff_client"]

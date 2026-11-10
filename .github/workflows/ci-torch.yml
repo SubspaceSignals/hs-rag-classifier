@@ -1,0 +1,71 @@
+# The torch and fine-tuning tests: the full suite with the ml and finetune groups (torch from the
+# cu128 index, as uv.lock pins it; it runs on the CPU here). Weekly and on demand only: the ml
+# group is a ~3.8 GB download and ~7 GB installed. GitHub-hosted standard runner; no secrets.
+
+name: CI (torch)
+
+on:
+  schedule:
+    - cron: "23 4 * * 1"  # Mondays 04:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  torch-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      TARIFF_API_OFFLINE: "1"
+      HF_HUB_OFFLINE: "1"
+    steps:
+      - name: Disk before
+        run: df -h /
+
+      # The install needs ~8 GB. Only if the runner has less than 15 GB free, remove preinstalled
+      # toolchains this job never uses (on the throwaway runner VM, not in the repo).
+      - name: Free disk if needed
+        run: |
+          avail=$(df --output=avail -BG / | tail -1 | tr -dc '0-9')
+          echo "available: ${avail} GB"
+          if [ "$avail" -lt 15 ]; then
+            sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+            df -h /
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.1"
+          python-version: "3.12"
+          enable-cache: false  # a ~4 GB cache entry is not worth it for a weekly run
+
+      - name: Install (dev, llm, serve, tracing, ml, finetune)
+        run: >-
+          uv sync --frozen --group dev --group llm --group serve --group tracing
+          --group ml --group finetune
+
+      - name: Disk after install
+        run: df -h / && du -sh .venv
+
+      - name: pytest
+        run: uv run --no-sync pytest -m "not frozen_host" -rs --junitxml=pytest-junit.xml
+
+      # Expected skips (6), from the local dry run with these groups on a fresh clone:
+      #   no llama-server: test_pipeline (1), test_a2_pipeline (1);
+      #   no GPU, HF cache or ~/data: test_b1_embed (1), test_embed_shared (1), test_ood (1),
+      #     test_atoz local nomenclature build (1).
+      - name: Skip guard
+        run: uv run --no-sync python scripts/check_skips.py pytest-junit.xml --max-skipped 6 --min-run 440
+
+      - name: Disk at the end
+        if: always()
+        run: df -h /
