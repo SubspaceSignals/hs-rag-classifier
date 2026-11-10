@@ -5,8 +5,9 @@
 #   . scripts/stack_env.sh && docker compose stop
 #
 # Tags never move. llama is hs-rag-classifier/llama:b11510-<short commit of the last change to
-# docker/llama/Dockerfile> (LLAMA_DOCKERFILE_COMMIT); api is hs-rag-classifier/api:<commit>
-# (GIT_COMMIT). scripts/stack_env.sh works both out; the build script refuses existing tags.
+# docker/llama/Dockerfile> (LLAMA_DOCKERFILE_COMMIT); api is hs-rag-classifier/api:<API_TAG>, HEAD's
+# commit (GIT_COMMIT, the build arg) unless HS_API_TAG selects an existing image to run.
+# scripts/stack_env.sh works them out; the build script refuses existing tags and HS_API_TAG.
 #
 # Every mount is read-only at the host's own absolute path (${HOME} on both sides), and HOME is
 # ${HOME} in both containers: A4's config_hash (5da7ac1452b3) includes the adapter's absolute
@@ -78,7 +79,7 @@ services:
 
   api:
     <<: *gpu
-    image: hs-rag-classifier/api:${GIT_COMMIT:?set GIT_COMMIT (scripts/stack_env.sh does)}
+    image: hs-rag-classifier/api:${API_TAG:?set API_TAG (scripts/stack_env.sh does)}
     build:
       context: .
       args:

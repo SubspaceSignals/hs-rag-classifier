@@ -16,6 +16,12 @@ set -euo pipefail
 # shellcheck source=stack_env.sh
 . "$(dirname "$0")/stack_env.sh"
 
+# Builds are always of HEAD: HS_API_TAG only selects an existing image to run (docker_up.sh).
+if [ -n "${HS_API_TAG:-}" ]; then
+  echo "refusing to build: HS_API_TAG is set (${HS_API_TAG}); builds are always of HEAD, unset it" >&2
+  exit 1
+fi
+
 if [ -n "$(git status --porcelain)" ]; then
   echo "refusing to build: the tree is dirty (commit or stash first):" >&2
   git status --porcelain >&2

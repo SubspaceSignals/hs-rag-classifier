@@ -1,6 +1,7 @@
 """Static checks of compose.yaml and the Dockerfiles (no Docker needed, so CI can run them)."""
 
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -134,11 +135,13 @@ def test_image_tags_follow_the_fixed_scheme():
     assert re.fullmatch(
         r"hs-rag-classifier/llama:b11510-\$\{LLAMA_DOCKERFILE_COMMIT:\?[^}]*\}", llama
     )
-    assert re.fullmatch(r"hs-rag-classifier/api:\$\{GIT_COMMIT:\?[^}]*\}", SERVICES["api"]["image"])
+    assert re.fullmatch(r"hs-rag-classifier/api:\$\{API_TAG:\?[^}]*\}", SERVICES["api"]["image"])
+    # The build arg is always HEAD's commit (the image bakes it), whatever tag is run.
+    assert SERVICES["api"]["build"]["args"]["GIT_COMMIT"].startswith("${GIT_COMMIT:?")
     env = (REPO_ROOT / "scripts" / "stack_env.sh").read_text()
     assert "LLAMA_DOCKERFILE_COMMIT=$(git log -1 --format=%h -- docker/llama/Dockerfile)" in env
     assert 'LLAMA_IMAGE="hs-rag-classifier/llama:b11510-${LLAMA_DOCKERFILE_COMMIT}"' in env
-    assert 'API_IMAGE="hs-rag-classifier/api:${GIT_COMMIT}"' in env
+    assert 'API_IMAGE="hs-rag-classifier/api:${API_TAG}"' in env
 
 
 def test_build_script_never_overwrites_an_existing_tag():
@@ -191,3 +194,66 @@ def test_no_tracked_file_holds_a_personal_home_path():
             if user not in HOME_PATHS_ALLOWED.get(name, set()):
                 found.append(f"{name}: /home/{user}")
     assert not found, found
+
+
+def _stack_env(**env):
+    """Source scripts/stack_env.sh in bash with env and return its exports (or the error)."""
+    if not (REPO_ROOT / ".git").exists():
+        pytest.skip("not a git checkout")
+    script = '. scripts/stack_env.sh && printf "%s\\n" "$GIT_COMMIT" "$API_TAG" "$API_TAG_SOURCE" "$API_IMAGE"'
+    base = {k: v for k, v in os.environ.items() if k != "HS_API_TAG"}
+    return subprocess.run(
+        ["bash", "-c", script],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**base, **env},
+    )
+
+
+def test_api_tag_defaults_to_head():
+    r = _stack_env()
+    assert r.returncode == 0, r.stderr
+    commit, tag, source, image = r.stdout.splitlines()
+    assert re.fullmatch(r"[0-9a-f]{40}", commit)
+    assert (tag, source, image) == (commit, "HEAD", f"hs-rag-classifier/api:{commit}")
+
+
+def test_hs_api_tag_selects_an_existing_image_and_keeps_head_for_builds():
+    r = _stack_env(HS_API_TAG="e65b69627eb0be0dcb1e93910332e548147d51c8")
+    assert r.returncode == 0, r.stderr
+    commit, tag, source, image = r.stdout.splitlines()
+    assert tag == "e65b69627eb0be0dcb1e93910332e548147d51c8" and source == "HS_API_TAG override"
+    assert image == f"hs-rag-classifier/api:{tag}"
+    assert re.fullmatch(r"[0-9a-f]{40}", commit)  # GIT_COMMIT (the build arg) is still HEAD
+
+
+@pytest.mark.parametrize("bad", ["-rm", "a b", "x;echo", "../x", "a" * 129])
+def test_hs_api_tag_must_be_a_valid_tag(bad):
+    r = _stack_env(HS_API_TAG=bad)
+    assert r.returncode != 0 and "not a valid image tag" in r.stderr
+
+
+def test_build_script_refuses_while_hs_api_tag_is_set():
+    if not (REPO_ROOT / ".git").exists():
+        pytest.skip("not a git checkout")
+    # Refuses right after sourcing stack_env.sh, before the tree check or any docker command.
+    r = subprocess.run(
+        ["bash", "scripts/docker_build.sh"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "HS_API_TAG": "e65b696", "PATH": "/usr/bin:/bin"},
+    )
+    assert r.returncode == 1 and "refusing to build: HS_API_TAG is set" in r.stderr
+    text = (REPO_ROOT / "scripts" / "docker_build.sh").read_text()
+    assert text.index("HS_API_TAG") < text.index("git status --porcelain")
+
+
+def test_up_script_reports_the_api_tag_source_and_built_commit():
+    text = (REPO_ROOT / "scripts" / "docker_up.sh").read_text()
+    assert "tag from ${API_TAG_SOURCE}" in text
+    assert "hs_rag_classifier.git_commit" in text
+    assert "refusing to start: $img does not exist" in text
