@@ -1,0 +1,102 @@
+# The local stack: llama-server (b11510, the frozen A4 server command) and the API.
+#
+#   scripts/docker_build.sh                          # build both images from a clean tree
+#   GIT_COMMIT=$(git rev-parse HEAD) docker compose up -d
+#   GIT_COMMIT=$(git rev-parse HEAD) docker compose stop
+#
+# Every mount is read-only at the host's own absolute path (${HOME} on both sides), and HOME is
+# ${HOME} in both containers: A4's config_hash (5da7ac1452b3) includes the adapter's absolute
+# path. No username in this file, no env_file, no .env in either image. llama is on an internal
+# network only (no published port, no outbound route); the API is published on 127.0.0.1 only.
+# No container memory limits: the host memory monitor watches both container processes.
+
+name: hs-rag-classifier
+
+x-gpu: &gpu
+  runtime: nvidia
+  restart: "no"
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  llama:
+    <<: *gpu
+    image: hs-rag-classifier/llama:b11510
+    build:
+      context: docker/llama
+      args:
+        APP_HOME: ${HOME}
+    environment:
+      HOME: ${HOME}
+      LLAMA_ARG_HOST: 0.0.0.0  # the frozen command has no --host; llama-server reads this instead
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    # The frozen A4 server command (configs/a4_pipeline.json server.command) after the binary,
+    # with ~ written as ${HOME}. tests/test_compose.py checks it token by token.
+    command:
+      - -hf
+      - unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL
+      - -ngl
+      - "99"
+      - -c
+      - "16384"
+      - --port
+      - "8080"
+      - --jinja
+      - --cache-ram
+      - "0"
+      - -np
+      - "1"
+      - --offline
+      - --lora
+      - ${HOME}/data/hs-rag-classifier/finetune/a4/runs/a4_full/gguf/final/a4_full_final.gguf
+    volumes:
+      - ${HOME}/.cache/huggingface/hub/models--unsloth--Qwen3.5-9B-GGUF:${HOME}/.cache/huggingface/hub/models--unsloth--Qwen3.5-9B-GGUF:ro
+      - ${HOME}/data/hs-rag-classifier/finetune/a4/runs/a4_full/gguf/final:${HOME}/data/hs-rag-classifier/finetune/a4/runs/a4_full/gguf/final:ro
+    networks:
+      - internal
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /health HTTP/1.0\r\n\r\n' >&3 && head -1 <&3 | grep -q ' 200 '
+      interval: 5s
+      timeout: 5s
+      start_period: 300s
+      retries: 3
+
+  api:
+    <<: *gpu
+    image: hs-rag-classifier/api:${GIT_COMMIT:?set GIT_COMMIT (scripts/docker_build.sh does)}
+    build:
+      context: .
+      args:
+        APP_HOME: ${HOME}
+        GIT_COMMIT: ${GIT_COMMIT:?set GIT_COMMIT (scripts/docker_build.sh does)}
+        GIT_DIRTY: ${GIT_DIRTY:-unset}
+    environment:
+      HOME: ${HOME}
+      LLAMA_URL: http://llama:8080
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ${HOME}/.cache/huggingface/hub/models--unsloth--Qwen3.5-9B-GGUF:${HOME}/.cache/huggingface/hub/models--unsloth--Qwen3.5-9B-GGUF:ro
+      - ${HOME}/data/hs-rag-classifier/finetune/a4/runs/a4_full/gguf/final:${HOME}/data/hs-rag-classifier/finetune/a4/runs/a4_full/gguf/final:ro
+      - ${HOME}/.cache/huggingface/hub/models--BAAI--bge-m3:${HOME}/.cache/huggingface/hub/models--BAAI--bge-m3:ro
+      - ${HOME}/.cache/huggingface/hub/models--Qwen--Qwen3.5-9B:${HOME}/.cache/huggingface/hub/models--Qwen--Qwen3.5-9B:ro
+      - ${HOME}/data/hs-rag-classifier:${HOME}/data/hs-rag-classifier:ro
+    networks:
+      - internal
+      - default
+    depends_on:
+      llama:
+        condition: service_healthy
+
+networks:
+  internal:
+    internal: true
