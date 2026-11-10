@@ -83,6 +83,38 @@ def test_dockerfile_base_images_are_pinned_by_tag_and_digest(path):
         assert "uv sync --frozen --no-dev --group llm --group ml --group serve" in text
 
 
+def test_api_dockerfile_no_uv_cache_and_readable_copies():
+    text = (REPO_ROOT / "Dockerfile").read_text()
+    syncs = [line for line in text.splitlines() if "uv sync" in line and line.startswith("RUN")]
+    assert len(syncs) == 2 and all("--no-cache" in line for line in syncs)
+    # Every copied path is made readable (NTFS 0700/0600 modes) before the project install.
+    copied = []
+    for line in text.splitlines():
+        if line.startswith("COPY") and "--from" not in line:
+            copied += line.split()[1:-1]
+    chmod = next(line for line in text.splitlines() if line.startswith("RUN chmod -R a+rX"))
+    assert all(f"/app/{p}" in chmod.split() for p in copied), (copied, chmod)
+    lines = text.splitlines()
+    assert lines.index(chmod) < max(
+        i for i, line in enumerate(lines) if line.startswith("RUN uv sync")
+    )
+
+
+def test_llama_cmake_flags_match_the_host_build():
+    text = (REPO_ROOT / "docker" / "llama" / "Dockerfile").read_text()
+    m = re.search(r"cmake -B build((?:\s+-D\S+|\s+\\)+)", text)
+    flags = sorted(f for f in m.group(1).split() if f.startswith("-D"))
+    assert flags == ["-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_CUDA_ARCHITECTURES=120",
+                     "-DGGML_CUDA=ON", "-DGGML_CUDA_NCCL=OFF"]  # fmt: skip
+    assert "c35b66744f13cb0dcc476af063e112122eee9355" in text
+
+
+def test_build_script_refuses_dirty_trees_and_checks_the_import():
+    text = (REPO_ROOT / "scripts" / "docker_build.sh").read_text()
+    assert "git status --porcelain" in text and "exit 1" in text
+    assert "--user 1000:1000" in text and "import hs_rag_classifier.service" in text
+
+
 def test_dockerignore_keeps_secrets_git_and_data_out():
     ignored = (REPO_ROOT / ".dockerignore").read_text().split()
     for entry in (".git", ".env", ".env.*", ".venv", "data", "models"):

@@ -1,7 +1,9 @@
 # llama-server b11510 (llama.cpp c35b66744f13cb0dcc476af063e112122eee9355), built as on the host:
 # CUDA 13.0.3, GCC 13, CMake 3.28, -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120
 # -DCMAKE_BUILD_TYPE=Release and every other option at its default (GGML_NATIVE=ON, so this image
-# is tuned to the CPU of the machine that builds it). The build context is this folder only.
+# is tuned to the CPU of the machine that builds it), except -DGGML_CUDA_NCCL=OFF: the CUDA devel
+# image ships NCCL, which the host build did not find, so OFF gives the host's effective build
+# (no libnccl linked). The build context is this folder only.
 #
 # The build stage records the toolchain versions in /opt/llama/build-info/ and keeps the
 # CMakeCache.txt there, so scripts can diff it against the host's ~/llama.cpp/build.
@@ -46,6 +48,7 @@ WORKDIR /src/llama.cpp
 RUN ln -s /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
  && export LD_LIBRARY_PATH=/usr/local/cuda/lib64/stubs \
  && cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120 -DCMAKE_BUILD_TYPE=Release \
+      -DGGML_CUDA_NCCL=OFF \
  && cmake --build build --target llama-server -j "$BUILD_JOBS" \
  && cp build/CMakeCache.txt /opt/llama/build-info/CMakeCache.txt \
  && mkdir -p /opt/llama/bin \

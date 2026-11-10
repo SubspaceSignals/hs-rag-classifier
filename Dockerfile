@@ -26,14 +26,19 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 # Dependencies first, for layer caching: the exact uv.lock versions of base + llm, ml, serve.
+# --no-cache everywhere: uv's download cache would otherwise stay in the layer (~8 GB).
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --group llm --group ml --group serve --no-install-project
+RUN uv sync --frozen --no-dev --group llm --group ml --group serve --no-install-project --no-cache
 
 # The package (editable, so REPO_ROOT is /app) and the configs it pins by SHA-256.
 COPY README.md LICENSE ./
 COPY src ./src
 COPY configs ./configs
-RUN uv sync --frozen --no-dev --group llm --group ml --group serve
+# The repo sits on NTFS, where some folders are 0700 and some files 0600; COPY keeps those modes
+# (owner root), so the app user (uid 1000) could not read the package. Readable by all, dirs
+# traversable, nothing made executable that was not.
+RUN chmod -R a+rX /app/pyproject.toml /app/uv.lock /app/README.md /app/LICENSE /app/src /app/configs
+RUN uv sync --frozen --no-dev --group llm --group ml --group serve --no-cache
 
 ARG GIT_COMMIT
 ARG GIT_DIRTY
