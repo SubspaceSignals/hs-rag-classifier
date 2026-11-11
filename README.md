@@ -205,6 +205,27 @@ None of these was built. Each would need its own validation work and, where it c
 - Kubernetes, an MLflow model registry and a published adapter.
 - A vector database (Qdrant). It was dropped deliberately, because exact in-memory search suits a few thousand vectors; it would matter only at a larger scale.
 
+## Mapping to Microsoft Foundry and Azure Machine Learning (not deployed)
+
+This is a paper exercise. Nothing here was deployed or tested, no Azure account was used, and no costs were estimated. It shows where each part of the local build would sit on Microsoft Foundry (formerly Azure AI Foundry) and Azure Machine Learning.
+
+| This build | On Azure (on paper) |
+| --- | --- |
+| llama.cpp serving Qwen3.5-9B with the LoRA adapter on one GPU | An Azure Machine Learning managed online endpoint on a GPU instance, or Foundry managed compute, serving the base model with the adapter |
+| QLoRA fine-tune on the workstation | An Azure Machine Learning job on GPU compute running the same training code |
+| Keyword, embedding and nearest-ruling search, merged by reciprocal rank fusion, in memory | An Azure AI Search hybrid query (keyword and vector, merged by reciprocal rank fusion) |
+| Local MLflow store; every run tagged with its commit and config hash | The Azure Machine Learning workspace as the MLflow tracking server, with the adapter registered as a model |
+| Optional OpenTelemetry tracing to a local Phoenix viewer | OpenTelemetry traces sent to Application Insights and viewed in Foundry |
+| FastAPI service in Docker Compose on 127.0.0.1 | The same container on Azure Container Apps on a private network, calling the model endpoint |
+| Trade Tariff client secret in an uncommitted .env file | Azure Key Vault, read through a managed identity |
+| Local check for injection-like text | The same check, plus Prompt Shields in Azure AI Content Safety |
+| GitHub Actions: lock check, lint, tests, secret scan | The same, plus image build and deployment, signing in to Azure with OpenID Connect |
+| Evaluation runs on frozen test sets, one run per set | Azure Machine Learning jobs reading the frozen splits as versioned data assets, still one run per test set |
+
+What would carry over unchanged: the review rule and the out-of-distribution flag are frozen configuration files that travel with the service, rules are fitted on validation only, and a person still decides.
+
+What would need checking first: whether the chosen model server returns the token probabilities that option scoring needs; which GPU size fits the roughly 9.2 GiB that serving uses; where the data may be held; and the cost.
+
 ## Data attribution
 
 Contains public sector information licensed under the [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/). Tariff data comes from the [GOV.UK Trade Tariff API](https://api.trade-tariff.service.gov.uk/). Datasets are downloaded from their source at run time and are never re-hosted in this repository.
