@@ -48,23 +48,47 @@ Use the fine-tuned option-scoring pipeline as a review aid, not as an autopilot.
 - **What it needs.** One 16 GB GPU, for both the one-off fine-tune and serving. The service handles about 20 items a minute, one request at a time.
 - **Before relying on it,** trial it with the people who assign codes. Measure how often the right code is in the top three and how much time is saved, not only auto-accept accuracy. The tariff changes over time, so pin the nomenclature version and re-check the thresholds when it changes.
 
-## Results so far
+## Results
 
-Every figure is from a single run per test set, with the decision rules fixed on validation before any test result (28 test-set runs in total). 95% bootstrap intervals in brackets.
+Every figure is from a single run per test set (28 test-set runs in total). Each decision rule was fitted on validation data only and frozen before it was applied to any test set. 95% bootstrap intervals are in brackets.
 
-| Approach | HMRC rulings test, 8-digit top-1 | A to Z test, 8-digit top-1 |
-| --- | --- | --- |
-| Keyword search (BM25) | 0.098 (0.083 to 0.113) | 0.373 (0.358 to 0.390) |
-| Nearest training ruling (embedding kNN) | 0.441 (0.415 to 0.465) | 0.107 (0.096 to 0.117) |
-| Retrieval + Qwen3.5-9B, generated answer | 0.489 (0.465 to 0.513) | 0.570 (0.554 to 0.588) |
-| Retrieval + Qwen3.5-9B, option scoring averaged over both option orders | 0.538 (0.513 to 0.561) | 0.604 (0.588 to 0.620) |
-| The same option-scoring pipeline with a QLoRA fine-tune (recommended) | 0.653 (0.629 to 0.678) | 0.643 (0.628 to 0.659) |
+### Accuracy
 
-The fine-tune's own effect is the last row minus the one above it, measured on the same server: +11.5 points (+9.3 to +13.7) on rulings and +3.9 (+2.8 to +5.1) on A to Z. The generated-answer row was measured on an earlier server configuration, so its gap to the rows below is indicative.
+8-digit top-1 is how often the first suggestion is exactly right; top-3 is how often the right code is among the three shown.
 
-- **Review, not replacement.** Under the operating-point rule fixed on validation, auto-accepted codes on the rulings test are right 80.5% of the time (77.5% to 82.9%), with 43.7% of items sent to a person for review.
-- **That figure covers ruling-style descriptions only.** The service also flags inputs unlike its training rulings and always sends them to review. The flag fires on 4.3% of rulings test items, 88.9% of the short A to Z queries and 65.8% of HSCodeComp e-commerce listings (92.2% on titles alone), where the rule on its own falls short (66.2% at 41.9% review, scored at 6 digits). On short text the service is a suggestion aid: it returns its top three codes for a person to confirm.
-- **Runs with one command.** FastAPI, llama.cpp and the retrieval index in Docker Compose, bound to localhost; CI runs tests, lint and a full-history secret scan on every push.
+| Approach | Rulings top-1 | Rulings top-3 | A to Z top-1 | A to Z top-3 | Items per minute | p95 seconds per item |
+| --- | --- | --- | --- | --- | --- | --- |
+| Keyword search (BM25) | 0.098 (0.083 to 0.113) | 0.166 | 0.373 (0.358 to 0.390) | 0.467 | 112,394 (batched) | under 0.01 (batched) |
+| Tariff embedding | 0.089 (0.074 to 0.104) | 0.177 | 0.395 (0.379 to 0.412) | 0.501 | 11,591 (batched) | under 0.01 (batched) |
+| Nearest training ruling | 0.441 (0.415 to 0.465) | 0.567 | 0.107 (0.096 to 0.117) | 0.140 | 12,900 (batched) | under 0.01 (batched) |
+| Fine-tuned encoder (6 digits only) | n/a; 6-digit 0.421 | n/a | n/a; 6-digit 0.008 | n/a | 18,144 (batched) | under 0.01 (batched) |
+| Retrieval + LLM, generated answer | 0.489 (0.465 to 0.513) | 0.639 | 0.570 (0.554 to 0.588) | 0.646 | 23.4 | 3.29 |
+| Retrieval + LLM, option scoring | 0.492 (0.468 to 0.517) | 0.675 | 0.580 (0.563 to 0.597) | 0.668 | 35.5 | 2.10 |
+| Option scoring averaged over both option orders | 0.538 (0.513 to 0.561) | 0.713 | 0.604 (0.588 to 0.620) | 0.690 | 24.5 | 3.00 |
+| The same pipeline with a QLoRA fine-tune (recommended) | 0.653 (0.629 to 0.678) | 0.803 | 0.643 (0.628 to 0.659) | 0.727 | 21.5 | 3.42 |
+
+- **The fine-tune's own effect** is the last row minus the one above it, on the same server: +11.5 points (+9.3 to +13.7) on rulings and +3.9 (+2.8 to +5.1) on A to Z. It was trained on ruling-style text only, which is likely why the gain on short A to Z queries is smaller.
+- **Generated answer v option scoring.** Their top-1 difference (0.492 v 0.489) is smaller than the spread between repeated runs of option scoring on a validation sample (0.51 to 0.55 over 15 runs of 100 items), so it is not counted as a gain. Option scoring's gain is a usable confidence score, which is what makes the review rule below possible. Both rows ran on an earlier 4-slot server configuration, so their gap to the rows below is indicative.
+- **Speed.** The four non-LLM approaches ran in batches of 64, and their per-item figures are batch averages. The LLM approaches ran one request at a time on one GPU. The three option-scoring rows include a separate rationale call (about 1 second). For the recommended pipeline, scoring alone takes 2.3 s at p95, and on A to Z it runs at 25.3 items a minute, 2.94 s at p95. None of the figures include model loading.
+
+### Review: the rule and the service
+
+The operating-point rule was fixed on rulings validation. It sets the review cut so that, across bootstrap resamples, the auto-accepted codes are at least 80% right at the 5th percentile. The service adds one more check: an out-of-distribution flag sends any input unlike the training rulings to review, whatever its confidence.
+
+| Test set | Rule alone: reviewed | Rule alone: auto-accepted right | Service (rule + flag): reviewed | Service: auto-accepted right | Flag fires on |
+| --- | --- | --- | --- | --- | --- |
+| HMRC rulings (8 digits) | 43.7% | 80.5% (77.5% to 82.9%) | 44.9% | 80.9% (78.0% to 83.5%) | 4.3% |
+| A to Z short queries (8 digits) | 52.2% | 87.4% (85.7% to 89.0%) | 92.3% | 87.1% (82.8% to 91.0%) | 88.9% |
+| HSCodeComp listings (6 digits) | 41.9% | 66.2% (60.9% to 71.1%) | 79.1% | 70.5% (62.2% to 78.2%) | 65.8% |
+
+- **On rulings** the 80% target holds at the point estimate but not at the lower end of its interval. Ordering by confidence alone, reported alongside, gives 83.0% (80.3% to 85.6%) at 42.8% review.
+- **On short queries** the rule meets the target, but the flag sends nine in ten to review anyway, because they look nothing like a ruling. Flagged items are harder (11.5 points less accurate than unflagged ones on A to Z, 21.7 on rulings), but on short queries the flag adds 40 points of review without raising the accuracy of what is auto-accepted (87.1% v 87.4%).
+- **On e-commerce listings** the rule falls well short: reaching 80% would have needed 78.5% review. This is the scope limit the flag exists for. On titles alone the flag fires on 92.2% of items.
+
+### Confidence and citations
+
+- **Calibration.** The fine-tune is more accurate but has a higher expected calibration error than the same pipeline without it: 0.080 v 0.049 on rulings (the intervals overlap) and 0.107 v 0.064 on A to Z. The review rule was fitted on the fine-tuned model's own validation confidences, so it allows for this.
+- **Citations.** The rationale quotes the chosen code's tariff text in 88.9% of rulings items and 95.1% of A to Z items.
 
 ## Data attribution
 
