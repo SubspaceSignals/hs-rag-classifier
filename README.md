@@ -8,6 +8,46 @@ Suggests UK commodity codes (8 digits and up) from free-text product description
 
 > **Advisory only.** Suggestions are not a legal ruling. The legal route for a binding classification is an [Advance Tariff Ruling](https://www.gov.uk/guidance/apply-for-an-advance-tariff-ruling) from HMRC.
 
+## The problem
+
+Every product a business exports, imports or buys in has to carry a commodity code from the UK tariff, at 8 digits or more. The code decides duty, controls and trade statistics, so a wrong one means paying the wrong duty, delays at the border or a compliance problem. People assign codes by reading the tariff against a product description, which is slow and inconsistent when descriptions are vague, and it holds up the shipping paperwork that depends on the code.
+
+## The aim
+
+An open-source, resource-light aid for commodity code selection that brings in what HMRC has already ruled on similar goods, shows the tariff text behind each suggestion, and gives each code a confidence score, so the people assigning codes can deal with routine items quickly and spend their time on the hard ones.
+
+Design choices that follow from that aim:
+
+- **Resource-light.** Everything runs on one 16 GB consumer GPU, with open-weight models and no cloud service, so it can run on an ordinary workstation.
+- **Data stays in-house.** Product descriptions never leave the machine.
+- **Built on public data.** It uses the UK tariff and published HMRC rulings, both under the Open Government Licence.
+- **Advisory only.** A person makes the final decision.
+
+## Options compared
+
+Eight approaches were built and tested on the same frozen test sets, from the cheapest to the most involved.
+
+| Option | How it works |
+| --- | --- |
+| Keyword search (BM25) | Ranks tariff lines by word overlap with the description |
+| Tariff embedding | Nearest tariff line by meaning, using an open embedding model |
+| Nearest training ruling | Copies the code of the most similar past HMRC ruling |
+| Fine-tuned encoder | A small classifier trained on past rulings; 6 digits only, as there are too few UK labels for 8 |
+| Retrieval + LLM, generated answer | Retrieves candidate codes and shows Qwen3.5-9B up to 42 six-digit subheadings; it picks one, then picks the 8-digit code from that subheading's codes |
+| Retrieval + LLM, option scoring | The same candidates shown as lettered options; the confidence comes from the model's token probabilities |
+| Option scoring averaged over both option orders | Scores the options in both orders to remove position bias, and queues items for review |
+| The same pipeline with a QLoRA fine-tune | A low-rank adapter trained on 11,916 examples built from the 3,773 training rulings, on the same GPU |
+
+## Recommendation
+
+Use the fine-tuned option-scoring pipeline as a review aid, not as an autopilot.
+
+- **For descriptions written like an HMRC ruling** (a sentence or more on what the product is, what it is made of and what it does), auto-accept codes above the threshold fixed on validation and send the rest to a person. On the rulings test, the auto-accepted codes are right 80.5% of the time with 43.7% of items reviewed. The 80% target holds at the point estimate; the lower end of the interval (77.5%) does not.
+- **For short or listing-style text**, do not auto-accept. The service flags these inputs and returns its top three codes, each with the tariff text it relied on, for a person to confirm.
+- **Why not something simpler.** Copying the nearest ruling does well on rulings (0.441) but fails on short queries (0.107), because it only works when a near-identical ruling exists. Keyword search is cheapest but rarely right at 8 digits. The fine-tune adds 11.5 points on rulings and 3.9 on short queries over the same pipeline without it.
+- **What it needs.** One 16 GB GPU, for both the one-off fine-tune and serving. The service handles about 20 items a minute, one request at a time.
+- **Before relying on it,** trial it with the people who assign codes. Measure how often the right code is in the top three and how much time is saved, not only auto-accept accuracy. The tariff changes over time, so pin the nomenclature version and re-check the thresholds when it changes.
+
 ## Results so far
 
 Every figure is from a single run per test set, with the decision rules fixed on validation before any test result (28 test-set runs in total). 95% bootstrap intervals in brackets.

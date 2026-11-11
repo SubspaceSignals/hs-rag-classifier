@@ -1,7 +1,5 @@
 # Data sources
 
-### Data sources
-
 All downloaded from source at run time; none are stored in this repository.
 
 - **HMRC Advance Tariff Rulings** (OGL v3.0): train, validation and test sets.

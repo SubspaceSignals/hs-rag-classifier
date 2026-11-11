@@ -1,6 +1,6 @@
 # Running locally
 
-### Decider server
+## Decider server
 
 ```bash
 ~/llama.cpp/build/bin/llama-server -hf unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL -ngl 99 -c 16384 --port 8080 --jinja --cache-ram 0 -np 1
@@ -10,7 +10,7 @@ Keep `-np 1` for evaluation: A2 output depended on llama-server slot and prompt-
 
 From commit 7e1955d on, every A1 and A2 run, and the tuning scripts, stop unless llama-server reports exactly one slot (`total_slots` in `/props`). The locked A1 and A2 test runs predate the guard and ran on the earlier 4-slot server; the A3 and A4 test runs ran on the one-slot, cache-off server. For dev runs only, `HS_ALLOW_MULTISLOT=1` or `--allow-multislot` continues with a warning and tags the MLflow run `multislot_override=true`; a test split refuses it. The `config_hash` does not capture the `cache_prompt`/`-np 1` fix, so runs before and after it share a hash; the `git_commit` and `server_slots` tags mark a reproducible run (every llama-server run is also tagged `cache_prompt`).
 
-### Tracing
+## Tracing
 
 Per-step latency, prompts and token counts for pipeline runs, in a local [Arize Phoenix](https://github.com/Arize-ai/phoenix) viewer. Tracing is off by default and is for dev, smoke and demo runs only: evaluation numbers are measured with it off, and a test split refuses it. It needs no account and sends nothing outside this machine.
 
