@@ -4,9 +4,24 @@
 
 Suggests UK commodity codes (8 digits and up) from free-text product descriptions, with a calibrated confidence and a rationale that cites the tariff text. Runs entirely on a local GPU.
 
-> **Status:** Phase 0, set-up. No classifier yet.
+> **Status (11 Nov 2026):** working end to end on one local GPU (RTX 5070 Ti, 16 GB) at zero cost. Evaluation is complete on frozen test sets; the full write-up is in progress. Model weights, fine-tuning data and built indexes are not distributed, so the repo is readable rather than turnkey.
 
 > **Advisory only.** Suggestions are not a legal ruling. The legal route for a binding classification is an [Advance Tariff Ruling](https://www.gov.uk/guidance/apply-for-an-advance-tariff-ruling) from HMRC.
+
+## Results so far
+
+Every figure is from a single run per test set, with the decision rules fixed on validation before any test result (28 test-set runs in total). 95% bootstrap intervals in brackets.
+
+| Approach | HMRC rulings test, 8-digit top-1 | A to Z test, 8-digit top-1 |
+| --- | --- | --- |
+| Keyword search (BM25) | 0.098 (0.083 to 0.113) | 0.373 (0.358 to 0.390) |
+| Nearest training ruling (embedding kNN) | 0.441 (0.415 to 0.465) | 0.107 (0.096 to 0.117) |
+| Retrieval + Qwen3.5-9B, untuned | 0.489 (0.465 to 0.513) | 0.570 (0.554 to 0.588) |
+| Retrieval + Qwen3.5-9B with a QLoRA fine-tune (recommended) | 0.653 (0.629 to 0.678) | 0.643 (0.628 to 0.659) |
+
+- **Review, not replacement.** Under the operating-point rule fixed on validation, codes the service auto-accepts on the rulings test are right 80.5% of the time (77.5% to 82.9%), with 43.7% of items sent to a person for review.
+- **Out of scope inputs are flagged.** On terse e-commerce listings (HSCodeComp, scored at 6 digits) the same rule falls short (66.2% at 41.9% review), so the service flags inputs unlike its training rulings and always sends them to review.
+- **Runs with one command.** FastAPI, llama.cpp and the retrieval index in Docker Compose, bound to localhost; CI runs tests, lint and a full-history secret scan on every push.
 
 ## Data attribution
 
