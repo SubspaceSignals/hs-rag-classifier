@@ -147,6 +147,36 @@ Confidence comes from the model's token probabilities over the listed options, t
 - Whether it saves reviewers time. No user trial has run, so faster review is an aim, not a result.
 - How often a rationale argues against its own code. At least one case was seen in a development run, but the rate has not been counted.
 
+## Engineering
+
+### Runs with one command
+
+On the author's workstation, `scripts/docker_up.sh` checks the mounts and starts two containers with Docker Compose. One runs llama.cpp (build b11510, compiled from source in the image to match the evaluation runs), serving Qwen3.5-9B with the fine-tuned adapter. The other runs a FastAPI service with the frozen A4 pipeline. The model weights, adapter, indexes and data are not distributed. Anyone can read the repository and run its tests, but the stack only starts where those files exist.
+
+- **Same answers in Docker.** On 13 validation items, three of them flagged out of distribution, the containerised service returned output identical to the reference evaluation run.
+- **Pinned at start-up.** The service refuses to start unless the pipeline's config hash and the hashes of both review rules match their frozen values.
+- **One request at a time.** The model server runs one slot with prompt caching off, the setting under which repeat runs are bit-identical. In the live smoke test, a request took a median 2.8 s.
+
+### Locked down by default
+
+- The API is published on 127.0.0.1 only, and a test fails if any published port is not. The model server sits on an internal network with no published port and no outbound route.
+- Both containers drop Linux capabilities and run with no-new-privileges, and the API runs as a non-root user.
+- A preflight refuses to start the stack if any link under a mounted folder points outside the mounted set.
+- Inside the container the service makes no Trade Tariff or Hugging Face calls. Tariff checks use a cached copy, falling back to the pinned nomenclature.
+
+### CI and tracking
+
+- GitHub Actions runs on every push and pull request. It checks the lock file, lints and checks formatting, runs 440 tests, and scans the full history for secrets with a pinned, checksum-verified gitleaks. A weekly workflow runs the torch and fine-tuning tests. Actions are pinned by commit SHA.
+- CI has no evaluation gate and builds no image, because the indexes and data it would need are not distributed. Evaluation runs locally.
+- Every evaluation run is logged to a local MLflow store with its git commit and config hash, and every test-set run passes through a guard that records it.
+- Optional tracing (OpenTelemetry to a local Arize Phoenix) shows per-step latency and token counts. It is off by default and refused on test sets.
+
+### Design choices
+
+- Vectors stay in memory with exact search, since a few thousand vectors need no vector database.
+- Everything ran on one 16 GB RTX 5070 Ti, including the QLoRA fine-tune (745 steps, about 10.4 hours). Serving peaks at about 9.2 GiB of GPU memory.
+- The front end is the author's existing commodity code lookup app. A suggest panel sits behind a feature flag on a branch and calls the local API through a development proxy.
+
 ## Data attribution
 
 Contains public sector information licensed under the [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/). Tariff data comes from the [GOV.UK Trade Tariff API](https://api.trade-tariff.service.gov.uk/). Datasets are downloaded from their source at run time and are never re-hosted in this repository.
