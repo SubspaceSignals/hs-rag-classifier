@@ -1,0 +1,6 @@
+# gitleaks findings confirmed as false positives, one fingerprint per line (commit:file:rule:line).
+# The pinned gitleaks reads this file from the scan root (-i/--gitleaks-ignore-path defaults to ".").
+
+# e743683 tests/test_compose.py:224: a 40-character git commit SHA used as an image tag in a test,
+# not a key (CI run 43021122378). The test now builds the value at run time.
+e7436834681b7c3d2aacb5b18f353c34a85504a9:tests/test_compose.py:generic-api-key:224

@@ -221,10 +221,14 @@ def test_api_tag_defaults_to_head():
 
 
 def test_hs_api_tag_selects_an_existing_image_and_keeps_head_for_builds():
-    r = _stack_env(HS_API_TAG="e65b69627eb0be0dcb1e93910332e548147d51c8")
+    # A full-length commit SHA as the tag, built at run time so no 40-hex literal sits in the source
+    # (gitleaks' generic-api-key rule flags one as a high-entropy key).
+    override = "e65b6962" * 5
+    assert re.fullmatch(r"[0-9a-f]{40}", override)
+    r = _stack_env(HS_API_TAG=override)
     assert r.returncode == 0, r.stderr
     commit, tag, source, image = r.stdout.splitlines()
-    assert tag == "e65b69627eb0be0dcb1e93910332e548147d51c8" and source == "HS_API_TAG override"
+    assert tag == override and source == "HS_API_TAG override"
     assert image == f"hs-rag-classifier/api:{tag}"
     assert re.fullmatch(r"[0-9a-f]{40}", commit)  # GIT_COMMIT (the build arg) is still HEAD
 
