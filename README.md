@@ -177,6 +177,34 @@ On the author's workstation, `scripts/docker_up.sh` checks the mounts and starts
 - Everything ran on one 16 GB RTX 5070 Ti, including the QLoRA fine-tune (745 steps, about 10.4 hours). Serving peaks at about 9.2 GiB of GPU memory.
 - The front end is the author's existing commodity code lookup app. A suggest panel sits behind a feature flag on a branch and calls the local API through a development proxy.
 
+## Limitations and future work
+
+### Limitations
+
+- **Ruling-style input only.** The review rule and the confidence were fitted on HMRC ruling descriptions. On short or listing-style text, the out-of-distribution flag sends 79% to 96% of items to review, and on HSCodeComp listings the rule's 80% target fails (66.2%). There is no validation set of short queries, so nothing was tuned for them.
+- **The 80% target holds at the point estimate only.** On rulings, accepted codes were right 80.5% of the time, but the lower end of the interval is 77.5%.
+- **Retrieval caps accuracy.** The right six-digit subheading is among the up to 42 options shown for 90.3% of rulings test items and 81.7% of A to Z terms. On A to Z, 609 of A4's 1,188 errors are retrieval misses that no model choice could fix. On rulings, 374 of 520 errors had the right subheading on offer.
+- **The fine-tune costs calibration.** A4 is more accurate than the same pipeline without the adapter, but its expected calibration error is higher (0.080 v 0.049 on rulings, 0.107 v 0.064 on A to Z).
+- **Contamination is not ruled out.** The rulings and HSCodeComp are public, so the base model may have seen them during pre-training (see "What this evaluation cannot rule out").
+- **A snapshot.** The tariff is pinned at nomenclature v4.0.1633 and the rulings were collected on 20 Oct 2026. Both change.
+- **One request at a time.** The evaluation runs managed about 21.5 rulings a minute with rationales. The service is built for a reviewer at a desk, not for bulk classification.
+- **Not turnkey.** The adapter, indexes and data are not distributed (see Engineering).
+- **A lead, not a finding.** Chapter 94 (furniture and lighting) did worse with the fine-tune on both sets (rulings: 1 item fixed, 7 broken; A to Z: 2 fixed, 8 broken), but it was picked out after the fact from 85 chapters on rulings and 93 on A to Z.
+
+### Future work
+
+None of these was built. Each would need its own validation work and, where it changes the model, its own single test run.
+
+- A short-query validation set, so the review rule and the flag can be fitted for terse input.
+- Better retrieval for terse input. Of the A to Z retrieval misses, 162 are in chapter 84.
+- Escalating hard items to a larger local model.
+- A check on rationale consistency, starting with a count of rationales that argue against their own code.
+- A supervised trial with people who classify goods day to day, measuring whether the right code is in the top three and whether review gets faster.
+- The encoder baseline retrained with US CROSS rulings, once that dataset is available from source again, and run past its 10-epoch cap.
+- A comparison against public Trade Tariff search.
+- Kubernetes, an MLflow model registry and a published adapter.
+- A vector database (Qdrant). It was dropped deliberately, because exact in-memory search suits a few thousand vectors; it would matter only at a larger scale.
+
 ## Data attribution
 
 Contains public sector information licensed under the [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/). Tariff data comes from the [GOV.UK Trade Tariff API](https://api.trade-tariff.service.gov.uk/). Datasets are downloaded from their source at run time and are never re-hosted in this repository.
