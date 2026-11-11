@@ -1,8 +1,9 @@
 """Vector store interface and the in-memory implementation.
 
 VectorStore is what the retrieval sources depend on: add vectors under string ids, search the
-top k by dot product (vectors are normalised, so this is cosine), and persist or load. A
-QdrantStore (Phase 4) implements the same methods; nothing else changes.
+top k by dot product (vectors are normalised, so this is cosine), and persist or load. The
+vectors are held in memory with exact search; no vector database was added (see the README's
+"Limitations and future work").
 
 InMemoryStore: exact search in numpy. Results are in descending score; ties keep insertion
 order (stable sort), so a store filled in code order breaks ties by the lower code.
