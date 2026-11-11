@@ -90,6 +90,28 @@ The operating-point rule was fixed on rulings validation. It sets the review cut
 - **Calibration.** The fine-tune is more accurate but has a higher expected calibration error than the same pipeline without it: 0.080 v 0.049 on rulings (the intervals overlap) and 0.107 v 0.064 on A to Z. The review rule was fitted on the fine-tuned model's own validation confidences, so it allows for this.
 - **Citations.** The rationale quotes the chosen code's tariff text in 88.9% of rulings items and 95.1% of A to Z items.
 
+## Method and evaluation discipline
+
+### Data and splits
+
+- **HMRC rulings.** All 6,131 current rulings were collected on 20 Oct 2026. They were de-duplicated and split once, before any model work, into 3,773 training, 750 validation and 1,500 test rulings (seed 20261020, stratified by chapter as far as near-duplicate clusters allow). Near-duplicate descriptions are kept in the same split. Validation and test hold only rulings whose code is a current declarable line. The model sees the description only; HMRC's written justification is never input.
+- **A to Z of classified goods.** 3,327 short terms from the Trade Tariff search references, used as a test set only and never indexed or trained on. Terms that appear under two different codes are excluded.
+- **HSCodeComp.** 632 expert-coded e-commerce listings (Apache-2.0, pinned revision), scored at 6 digits because its labels are US codes. It is an outside check on messier input than rulings.
+- **Overlap checks.** No test ruling has a near-duplicate in the training rulings (near-duplicate clusters, TF-IDF cosine ≥ 0.85, never cross splits). A to Z terms and HSCodeComp listings were checked against the training rulings for exact matches and for matches on the same opening text and code; HSCodeComp titles were also checked against A to Z terms for exact matches. None were found.
+- The test files' hashes are pinned (in `splits/` for rulings and A to Z, and in `configs/hscodecomp_inputs.json` for HSCodeComp) and checked by tests.
+
+### Discipline
+
+- **One run per approach per test set.** That gives 28 test runs, each recorded in a run log and tied in MLflow to its commit and config hash.
+- **All tuning on validation.** Retrieval settings, the number of options shown to the model, the confidence temperatures, the review rule and the out-of-distribution threshold were all set on validation. Each decision rule was fitted on validation data only and frozen in `configs/` before it was applied to any test set.
+- **Intervals.** 95% intervals come from 1,000 bootstrap resamples (seed 20261021), resampling near-duplicate clusters on rulings. Differences between approaches use a paired bootstrap over the same items.
+- **Reproducible LLM runs.** The option-scoring and fine-tuned approaches ran on a server that handles one request at a time with prompt caching off. Under that setting, option scoring gave bit-identical results over all 750 validation items, run twice. The scripts now refuse a test run on a server with more than one slot or with tracing on; prompt caching is fixed off in the client. The first two LLM approaches were tested before this fix.
+- **How it was built.** The code was written with Claude Code (Anthropic's coding assistant), directed and reviewed by the author. No text written by an AI assistant is in any test set.
+
+### What this evaluation cannot rule out
+
+Published rulings and HSCodeComp may be in the base model's pre-training data, which would flatter every LLM approach. HSCodeComp has been public since October 2025, so it is a weaker check on this than a private test set would be. The fine-tune's effect (fine-tuned v the same pipeline without the adapter) is largely unaffected, because both use the same base model.
+
 ## Data attribution
 
 Contains public sector information licensed under the [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/). Tariff data comes from the [GOV.UK Trade Tariff API](https://api.trade-tariff.service.gov.uk/). Datasets are downloaded from their source at run time and are never re-hosted in this repository.
