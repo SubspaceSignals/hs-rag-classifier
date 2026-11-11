@@ -112,6 +112,41 @@ The operating-point rule was fixed on rulings validation. It sets the review cut
 
 Published rulings and HSCodeComp may be in the base model's pre-training data, which would flatter every LLM approach. HSCodeComp has been public since October 2025, so it is a weaker check on this than a private test set would be. The fine-tune's effect (fine-tuned v the same pipeline without the adapter) is largely unaffected, because both use the same base model.
 
+## Responsible AI
+
+The service suggests; a person decides. Every response says it is not a legal ruling and points to HMRC's Advance Tariff Ruling as the binding route.
+
+### What a response contains
+
+- Up to three 8-digit codes, each with a confidence, so the reviewer sees the alternatives, not a single answer.
+- A short rationale quoting the chosen code's tariff text. A separate call writes it after the choice and cannot change it. On the test sets, 88.9% (rulings) and 95.1% (A to Z) of rationales pass the citation check.
+- The nearest HMRC ruling from the training set, with its code and whether it agrees with the suggestion, as precedent the reviewer can check.
+- Codes only from the retrieved list: the model chooses among real codes, so it cannot make one up, and each chosen code is also checked against the tariff.
+
+### When it asks for review
+
+A response is marked for review when either of two rules fires. Both were fitted on validation only and frozen before being applied to any test set.
+
+- **The operating-point rule** aims for accepted codes to be right 80% of the time. On the rulings test set, accepted codes were right 80.5% of the time (77.5% to 82.9%) with 43.7% sent to review; the lower end of that interval misses 80%. On A to Z terms: 87.4% at 52.2% review. On HSCodeComp listings the rule fails: 66.2% at 41.9% review.
+- **The out-of-distribution flag** fires when an input's nearest training ruling is less similar than it is for 95% of validation rulings (cosine similarity below 0.638). It fires on 4.3% of rulings test items, 88.9% of A to Z terms and 65.8% to 92.2% of HSCodeComp listings. On rulings, A to Z and HSCodeComp listings with their attributes, flagged items are 11.5 to 21.7 points less accurate than unflagged ones; on title-only HSCodeComp input the gap is 7.6 points and its interval includes zero. On A to Z, though, the flag adds about 40 points of review without raising the accuracy of accepted codes (87.1% v 87.4%). The response shows the similarity, the threshold and the nearest ruling, so the reason is visible.
+
+Together they send 44.9% of rulings test items to review, and 79% to 96% of short or listing-style inputs. The 80% figure therefore describes ruling-style descriptions only. On short text the service is a suggestion aid, and nearly everything goes to a person.
+
+### What the confidence means
+
+Confidence comes from the model's token probabilities over the listed options, temperature-scaled on validation. It is not a guarantee: expected calibration error is 0.080 on rulings and 0.107 on A to Z (at 8 digits), and 0.166 on HSCodeComp (at 6 digits); on rulings and A to Z that is higher than for the same pipeline without the adapter (0.049 and 0.064). It orders the review queue; it does not replace review.
+
+### Data and security
+
+- Public data only: HMRC rulings and the tariff under the Open Government Licence, and HSCodeComp under Apache-2.0. No company, supplier or personal data, and no AI-written text in any test set.
+- Runs on one workstation. The API listens on 127.0.0.1 only, the model server has no outbound network route, and the container makes no Trade Tariff or Hugging Face calls and holds no credentials.
+- Descriptions are treated as untrusted data. They must be 1 to 10,000 characters, are checked for injection-like text and are never logged, and the pipeline has no tool that can change anything.
+
+### Not yet measured
+
+- Whether it saves reviewers time. No user trial has run, so faster review is an aim, not a result.
+- How often a rationale argues against its own code. At least one case was seen in a development run, but the rate has not been counted.
+
 ## Data attribution
 
 Contains public sector information licensed under the [Open Government Licence v3.0](https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/). Tariff data comes from the [GOV.UK Trade Tariff API](https://api.trade-tariff.service.gov.uk/). Datasets are downloaded from their source at run time and are never re-hosted in this repository.
