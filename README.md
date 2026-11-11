@@ -4,7 +4,7 @@
 
 Suggests UK commodity codes (8 digits and up) from free-text product descriptions, with a confidence score and a rationale that cites the tariff text. Runs entirely on a local GPU.
 
-> **Status (11 Nov 2026):** working end to end on one local GPU (RTX 5070 Ti, 16 GB) at zero cost. Evaluation is complete on frozen test sets; the full write-up is in progress. Model weights, fine-tuning data and built indexes are not distributed, so the repo is readable rather than turnkey.
+> **Status (11 Nov 2026):** runs end to end on one local GPU (RTX 5070 Ti, 16 GB) with open models and public data. Evaluation on frozen test sets is complete and written up below. Model weights, fine-tuning data and built indexes are not distributed, so the repo is readable rather than turnkey.
 
 > **Advisory only.** Suggestions are not a legal ruling. The legal route for a binding classification is an [Advance Tariff Ruling](https://www.gov.uk/guidance/apply-for-an-advance-tariff-ruling) from HMRC.
 
@@ -45,7 +45,7 @@ Use the fine-tuned option-scoring pipeline as a review aid, not as an autopilot.
 - **For descriptions written like an HMRC ruling** (a sentence or more on what the product is, what it is made of and what it does), auto-accept codes above the threshold fixed on validation and send the rest to a person. On the rulings test, the auto-accepted codes are right 80.5% of the time with 43.7% of items reviewed. The 80% target holds at the point estimate; the lower end of the interval (77.5%) does not.
 - **For short or listing-style text**, do not auto-accept. The service flags these inputs and returns its top three codes, each with the tariff text it relied on, for a person to confirm.
 - **Why not something simpler.** Copying the nearest ruling does well on rulings (0.441) but fails on short queries (0.107), because it only works when a near-identical ruling exists. Keyword search is cheapest but rarely right at 8 digits. The fine-tune adds 11.5 points on rulings and 3.9 on short queries over the same pipeline without it.
-- **What it needs.** One 16 GB GPU, for both the one-off fine-tune and serving. The service handles about 20 items a minute, one request at a time.
+- **What it needs.** One 16 GB GPU, for both the one-off fine-tune and serving. In the evaluation runs it handled about 21.5 items a minute on rulings and 25.3 on A to Z, one request at a time.
 - **Before relying on it,** trial it with the people who assign codes. Measure how often the right code is in the top three and how much time is saved, not only auto-accept accuracy. The tariff changes over time, so pin the nomenclature version and re-check the thresholds when it changes.
 
 ## Results
